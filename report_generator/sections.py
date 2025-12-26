@@ -1792,8 +1792,8 @@ def _generate_individuals_table(
 
     latex = [
         r"\subsubsection*{Individuals}",
-        r"\begin{longtable}{|p{0.25\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|p{0.35\textwidth}|}",
-        r"\hline \textbf{Individual} & \textbf{Status} & \textbf{Occupation} & \textbf{Role} \\ \hline \endhead",
+        r"\begin{longtable}{|p{0.20\textwidth}|p{0.12\textwidth}|p{0.12\textwidth}|p{0.20\textwidth}|p{0.30\textwidth}|}",
+        r"\hline \textbf{Individual} & \textbf{Status} & \textbf{Occupation} & \textbf{Role} & \textbf{Location} \\ \hline \endhead",
     ]
 
     if not gt_agents:
@@ -1801,12 +1801,14 @@ def _generate_individuals_table(
         for ai_agent in ai_agents:
             ai_name = get_person_name(ai_agent)
             name_display = f"\\ailabel~{clean_text_for_xelatex(ai_name)}"
+            ai_location = format_location(ai_agent.get("TblAgent", {}).get("LocationDetails"))
             
             latex.append(
                 f"{name_display} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgent', {}).get('Occupation'))} & "
-                f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentRole', {}).get('role'))} \\\\ \\hline"
+                f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentRole', {}).get('role'))} & "
+                f"\\ailabel~{clean_text_for_xelatex(ai_location)} \\\\ \\hline"
             )
         latex.append(r"\end{longtable}")
         return latex
@@ -1814,14 +1816,15 @@ def _generate_individuals_table(
     if not ai_agents:
         # No AI agents, show all GT agents
         for gt_agent in gt_agents:
+            gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
             latex.append(
                 f"\\gtlabel~{clean_text_for_xelatex(get_person_name(gt_agent))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgent', {}).get('Occupation'))} & "
-                f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} \\\\ \\hline"
+                f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} & "
+                f"\\gtlabel~{clean_text_for_xelatex(gt_location)} \\\\ \\hline"
             )
         latex.append(r"\end{longtable}")
-        return latex
         return latex
 
     # Build cost matrix: rows = GT agents, columns = AI agents
@@ -1891,17 +1894,31 @@ def _generate_individuals_table(
                 metrics,
                 api_key=api_key,
             )
+            # Compare agent location
+            gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
+            ai_location = format_location(ai_agent.get("TblAgent", {}).get("LocationDetails"))
+            location_comp = compare_field(
+                gt_location,
+                ai_location,
+                "Agent Location",
+                "Agents",
+                metrics,
+                api_key=api_key,
+            )
             latex.append(
                 f"{name_display} & {format_comparison_cell(status_comp)} & "
-                f"{format_comparison_cell(occ_comp)} & {format_comparison_cell(role_comp)} \\\\ \\hline"
+                f"{format_comparison_cell(occ_comp)} & {format_comparison_cell(role_comp)} & "
+                f"{format_comparison_cell(location_comp)} \\\\ \\hline"
             )
         else:
             # Similarity too low, treat as unmatched GT
+            gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
             latex.append(
                 f"\\gtlabel~{clean_text_for_xelatex(get_person_name(gt_agent))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgent', {}).get('Occupation'))} & "
-                f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} \\\\ \\hline"
+                f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} & "
+                f"\\gtlabel~{clean_text_for_xelatex(gt_location)} \\\\ \\hline"
             )
             matched_ai_indices.discard(ai_idx)  # Don't count as matched
     
@@ -1909,11 +1926,13 @@ def _generate_individuals_table(
     matched_gt_indices = set(row_ind)
     for i, gt_agent in enumerate(gt_agents):
         if i not in matched_gt_indices:
+            gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
             latex.append(
                 f"\\gtlabel~{clean_text_for_xelatex(get_person_name(gt_agent))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgent', {}).get('Occupation'))} & "
-                f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} \\\\ \\hline"
+                f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} & "
+                f"\\gtlabel~{clean_text_for_xelatex(gt_location)} \\\\ \\hline"
             )
 
     # Process unmatched AI agents
@@ -1921,12 +1940,14 @@ def _generate_individuals_table(
         if j not in matched_ai_indices:
             ai_name = get_person_name(ai_agent)
             name_display = f"\\ailabel~{clean_text_for_xelatex(ai_name)}"
+            ai_location = format_location(ai_agent.get("TblAgent", {}).get("LocationDetails"))
             
             latex.append(
                 f"{name_display} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgent', {}).get('Occupation'))} & "
-                f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentRole', {}).get('role'))} \\\\ \\hline"
+                f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentRole', {}).get('role'))} & "
+                f"\\ailabel~{clean_text_for_xelatex(ai_location)} \\\\ \\hline"
             )
 
     latex.append(r"\end{longtable}")

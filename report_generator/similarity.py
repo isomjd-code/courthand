@@ -57,6 +57,7 @@ def get_field_threshold(field_name: str, category: str) -> float:
     Thresholds:
     - Agent Name: > 95% (0.95) - Keep strict for names
     - Event Place: > 95% (0.95) - Keep strict for places
+    - Agent Location: > 95% (0.95) - Keep strict for locations
     - Case Details Block (Pleading/Postea text blocks): > 75% (0.75) - Lowered to catch partial matches
     - Case Type: > 85% (0.85) - Allow for variations in case type descriptions
     - Damages Claimed: > 90% (0.90) - Numbers should be exact
@@ -64,7 +65,7 @@ def get_field_threshold(field_name: str, category: str) -> float:
     """
     if field_name == "Agent Name":
         return 0.95
-    elif field_name == "Event Place":
+    elif field_name == "Event Place" or field_name == "Agent Location":
         return 0.95
     elif "Block" in field_name:
         # Case Details Block fields (Pleading, Postea) use 75% threshold (lowered from 78%)
@@ -280,7 +281,7 @@ def compare_field(
             )
             metrics.add(comparison)
             return comparison
-    elif field_name == "Event Place":
+    elif field_name == "Event Place" or field_name == "Agent Location":
         # Special case: if first normalized word matches, treat as 100% match
         # This handles cases like "Southwark, Surrey, England" vs "Southwark"
         if gt_str and ai_str:
