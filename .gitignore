@@ -35,3 +35,9 @@ bootstrap_training_data/
 !workflow_active_model/*.ckpt
 !workflow_active_model/model
 !*.ckpt
+
+# 10. Never track environment files with secrets
+.env
+.env.local
+.env.*.local
+*.env

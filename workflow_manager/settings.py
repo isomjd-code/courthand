@@ -10,6 +10,15 @@ import random
 # --- USER CONFIGURATION ---
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(PACKAGE_DIR)
+
+# Try to load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    # Load .env from project root
+    load_dotenv(os.path.join(BASE_DIR, '.env'))
+except ImportError:
+    # python-dotenv not installed, skip .env loading
+    pass
 HOME_DIR = os.path.expanduser("~")
 WORK_DIR = os.path.join(BASE_DIR, "cp40_processing")
 IMAGE_DIR = os.path.join(BASE_DIR, "input_images")
@@ -40,7 +49,7 @@ ACTIVE_MODEL_DIR = os.path.abspath(ACTIVE_MODEL_DIR)
 
 # LLM CONFIGURATION
 # Gemini 3 Flash Preview API key - set via environment variable GEMINI_API_KEY (paid key required)
-GEMINI_API_KEY = "AIzaSyBmFe4P5cV1L7L5EmjLVC32AQiTQHmgJ7A"
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable must be set with a paid API key")
 

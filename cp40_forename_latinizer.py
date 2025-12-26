@@ -46,22 +46,34 @@ from google.genai import types
 def get_free_api_key() -> str:
     """
     Get a free API key for Gemini API calls.
-    Randomly selects from a pool of keys to distribute load.
+    Reads from environment variable GEMINI_FREE_API_KEYS (comma-separated list).
+    If not set, falls back to GEMINI_API_KEY.
+    Randomly selects from available keys to distribute load.
     
     Returns:
         str: A free API key for Gemini API
+    
+    Raises:
+        RuntimeError: If no API keys are configured
     """
-    seed = random.randint(1, 4)
-    if seed == 1:
-        return 'AIzaSyCKaa2wRfvl2Tdm54z4UndljxaWAF0AT3s'
-    elif seed == 2:
-        return 'AIzaSyAuYGtV_gHv3MRtvjX_4XsheSgA9-Yfv88'
-    elif seed == 3:
-        return 'AIzaSyDHFVLSQOAuVgbgPdHSXGQ4szcTxO9kK9s'
-    elif seed == 4:
-        return 'AIzaSyBtAL-otqjPgw6Vu6Lyba3-22K0N-f3-k'
-    else:
-        return 'AIzaSyCKaa2wRfvl2Tdm54z4UndljxaWAF0AT3s'
+    import os
+    
+    # Try to get free API keys from environment (comma-separated)
+    free_keys_str = os.environ.get('GEMINI_FREE_API_KEYS', '')
+    if free_keys_str:
+        free_keys = [key.strip() for key in free_keys_str.split(',') if key.strip()]
+        if free_keys:
+            return random.choice(free_keys)
+    
+    # Fall back to main API key
+    main_key = os.environ.get('GEMINI_API_KEY')
+    if main_key:
+        return main_key
+    
+    raise RuntimeError(
+        "No API keys configured. Set GEMINI_FREE_API_KEYS (comma-separated) "
+        "or GEMINI_API_KEY environment variable"
+    )
 
 
 # Latin declension cases used in medieval legal documents
@@ -563,7 +575,8 @@ class ForenameLatinizer:
     
     def _init_gemini_client(self) -> genai.Client:
         """Initialize Gemini API client using paid API key from environment variable."""
-        api_key =  "AIzaSyBmFe4P5cV1L7L5EmjLVC32AQiTQHmgJ7A"
+        import os
+        api_key = os.environ.get('GEMINI_API_KEY')
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY environment variable must be set with a paid API key")
         return genai.Client(api_key=api_key)
