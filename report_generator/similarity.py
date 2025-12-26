@@ -198,6 +198,7 @@ def compare_field(
     Compare two field values using semantic similarity when available.
     
     Special handling: 
+    - For "Case Type", if the first word matches (case-insensitive), treat as 100% match.
     - For "Case Type", if GT contains "Detention" and AI is "Detinue", treat as 100% match.
     - For "Agent Status", if GT is empty but AI has a value, treat as a match (don't penalize AI for providing status when GT doesn't).
     - For "Agent Occupation", if GT is empty but AI has a value, treat as a match (don't penalize AI for providing occupation when GT doesn't).
