@@ -88,7 +88,7 @@ MIN_VALID_TRAINING_LINES = 5000  # Minimum valid lines required before creating 
 # 
 # If value < 1.0: Treated as similarity threshold (0.0-1.0), e.g., 0.80 means 80% similarity required
 # If value >= 1.0: Treated as absolute distance threshold, e.g., 50 means max 50 character differences
-MAX_LEVENSHTEIN_DISTANCE = 0.30  # Similarity threshold: require 30% similarity between HTR and corrected text
+MAX_LEVENSHTEIN_DISTANCE = 0.5  # Similarity threshold: require 50% similarity between HTR and corrected text
 
 
 def parse_image_filename(filename: str) -> Optional[Tuple[str, str]]:
