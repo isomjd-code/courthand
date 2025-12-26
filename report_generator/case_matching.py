@@ -46,8 +46,10 @@ def extract_party_names(gt_case: Dict[str, Any]) -> List[str]:
     agents = gt_case.get("Agents", [])
     for agent in agents:
         name_info = agent.get("TblName", {})
-        christian_name = name_info.get("Christian name", "").strip()
-        surname = name_info.get("Surname", "").strip()
+        if not name_info:
+            continue
+        christian_name = (name_info.get("Christian name") or "").strip()
+        surname = (name_info.get("Surname") or "").strip()
         if christian_name or surname:
             full_name = f"{christian_name} {surname}".strip()
             if full_name:
@@ -61,8 +63,10 @@ def extract_party_names_ai(ai_case: Dict[str, Any]) -> List[str]:
     agents = ai_case.get("Agents", [])
     for agent in agents:
         name_info = agent.get("TblName", {})
-        christian_name = name_info.get("Christian name", "").strip()
-        surname = name_info.get("Surname", "").strip()
+        if not name_info:
+            continue
+        christian_name = (name_info.get("Christian name") or "").strip()
+        surname = (name_info.get("Surname") or "").strip()
         if christian_name or surname:
             full_name = f"{christian_name} {surname}".strip()
             if full_name:
