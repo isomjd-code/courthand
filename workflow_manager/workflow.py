@@ -2849,11 +2849,57 @@ class WorkflowManager:
                 except Exception as e:
                     logger.debug(f"[{gid}] Could not load token usage from master_record.json: {e}")
             
-            # Use Step 1 token usage from master_record.json if not already available
+            # Helper function to load token usage from multiple sources
+            def load_token_usage_from_sources(step_key: str, step_specific_file: str = None) -> Optional[Dict[str, Any]]:
+                """Try to load token usage from multiple sources in order of preference.
+                
+                Args:
+                    step_key: The key used in master_record.json (e.g., "step1_diplomatic_transcription")
+                    step_specific_file: Optional path to a step-specific token usage file
+                
+                Returns:
+                    Token usage dict if found, None otherwise
+                """
+                # Try 1: master_record.json (already loaded)
+                if token_usage_from_master:
+                    usage = token_usage_from_master.get(step_key)
+                    if usage:
+                        logger.debug(f"[{gid}] Found {step_key} token usage in master_record.json")
+                        return usage
+                
+                # Try 2: Step-specific token usage file (like step1_token_usage.json)
+                if step_specific_file and os.path.exists(step_specific_file):
+                    try:
+                        with open(step_specific_file, 'r', encoding='utf-8') as f:
+                            usage = json.load(f)
+                            if usage:
+                                logger.info(f"[{gid}] Loaded {step_key} token usage from {step_specific_file}")
+                                return usage
+                    except Exception as e:
+                        logger.debug(f"[{gid}] Could not load token usage from {step_specific_file}: {e}")
+                
+                # Try 3: Check if there's a token usage file with standard naming pattern
+                # (e.g., step2a_token_usage.json, step2b_token_usage.json, etc.)
+                step_num = step_key.split('_')[0]  # Extract "step1", "step2a", etc.
+                standard_token_file = os.path.join(out_dir, f"{step_num}_token_usage.json")
+                if os.path.exists(standard_token_file):
+                    try:
+                        with open(standard_token_file, 'r', encoding='utf-8') as f:
+                            usage = json.load(f)
+                            if usage:
+                                logger.info(f"[{gid}] Loaded {step_key} token usage from {standard_token_file}")
+                                return usage
+                    except Exception as e:
+                        logger.debug(f"[{gid}] Could not load token usage from {standard_token_file}: {e}")
+                
+                return None
+            
+            # Use Step 1 token usage from multiple sources if not already available
             if token_usage_step1 is None:
-                token_usage_step1 = token_usage_from_master.get("step1_diplomatic_transcription")
+                step1_token_file = os.path.join(out_dir, "step1_token_usage.json")
+                token_usage_step1 = load_token_usage_from_sources("step1_diplomatic_transcription", step1_token_file)
                 if token_usage_step1:
-                    logger.info(f"[{gid}] Loaded Step 1 token usage from master_record.json")
+                    logger.info(f"[{gid}] Loaded Step 1 token usage from available sources")
             
             if token_usage_step1 is None:
                 logger.info(f"[{gid}] Post-correction complete. Step 1 token usage not available from batch job, saved file, or master record.")
@@ -2912,11 +2958,10 @@ class WorkflowManager:
                             logger.error(f"[{gid}] data_2a is not a dict (type: {type(data_2a)}). Re-running.")
                             data_2a = {}
                         step2a_loaded_from_disk = True
-                    # Load token usage from master_record.json if available
-                    if token_usage_from_master:
-                        token_usage_2a = token_usage_from_master.get("step2a_merge_and_extract")
-                        if token_usage_2a:
-                            logger.info(f"[{gid}] Loaded Step 2a token usage from master_record.json")
+                    # Try to load token usage from multiple sources
+                    token_usage_2a = load_token_usage_from_sources("step2a_merge_and_extract")
+                    if token_usage_2a:
+                        logger.info(f"[{gid}] Loaded Step 2a token usage from available sources")
                 except Exception as e:
                     logger.error(f"[{gid}] Failed to load Step 2a file: {e}. Re-running.")
 
@@ -3156,11 +3201,10 @@ class WorkflowManager:
                 logger.info(f"[{gid}] Skipping Step 2b LLM (Loading from disk)...")
                 with open(step2b_path, 'r', encoding='utf-8') as f:
                     latin_text = f.read()
-                # Load token usage from master_record.json if available
-                if token_usage_from_master:
-                    token_usage_2b = token_usage_from_master.get("step2b_expand_abbreviations")
-                    if token_usage_2b:
-                        logger.info(f"[{gid}] Loaded Step 2b token usage from master_record.json")
+                # Try to load token usage from multiple sources
+                token_usage_2b = load_token_usage_from_sources("step2b_expand_abbreviations")
+                if token_usage_2b:
+                    logger.info(f"[{gid}] Loaded Step 2b token usage from available sources")
             else:
                 try:
                     parts = self.prompt_step2b_expansion(merged_text)
@@ -3190,11 +3234,10 @@ class WorkflowManager:
                 logger.info(f"[{gid}] Skipping Step 3 LLM (Loading from disk)...")
                 with open(step3_path, 'r', encoding='utf-8') as f:
                     english_text = f.read()
-                # Load token usage from master_record.json if available
-                if token_usage_from_master:
-                    token_usage_3 = token_usage_from_master.get("step3_translation")
-                    if token_usage_3:
-                        logger.info(f"[{gid}] Loaded Step 3 token usage from master_record.json")
+                # Try to load token usage from multiple sources
+                token_usage_3 = load_token_usage_from_sources("step3_translation")
+                if token_usage_3:
+                    logger.info(f"[{gid}] Loaded Step 3 token usage from available sources")
             else:
                 parts = self.prompt_step3_translation(latin_text)
                 english_text, token_usage_3 = self._generate_batch_single(
@@ -3240,11 +3283,10 @@ class WorkflowManager:
                 try:
                     with open(final_json_path, 'r', encoding='utf-8') as f:
                         final_data = json.load(f)
-                    # Load token usage from master_record.json if available
-                    if token_usage_from_master:
-                        token_usage_4 = token_usage_from_master.get("step4_indexing")
-                        if token_usage_4:
-                            logger.info(f"[{gid}] Loaded Step 4 token usage from master_record.json")
+                    # Try to load token usage from multiple sources
+                    token_usage_4 = load_token_usage_from_sources("step4_indexing")
+                    if token_usage_4:
+                        logger.info(f"[{gid}] Loaded Step 4 token usage from available sources")
                 except Exception as e:
                      logger.error(f"[{gid}] Failed to load final index: {e}. Re-running.")
 
