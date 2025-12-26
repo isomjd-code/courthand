@@ -2699,6 +2699,17 @@ class WorkflowManager:
             # Initialize token usage for step 1
             token_usage_step1 = None
             
+            # Try to load token usage from saved file if all results were loaded from disk
+            if not images_to_process:
+                token_usage_file = os.path.join(out_dir, "step1_token_usage.json")
+                if os.path.exists(token_usage_file):
+                    try:
+                        with open(token_usage_file, 'r', encoding='utf-8') as f:
+                            token_usage_step1 = json.load(f)
+                            logger.info(f"[{gid}] Loaded Step 1 token usage from saved file: {token_usage_step1}")
+                    except Exception as e:
+                        logger.warning(f"[{gid}] Failed to load Step 1 token usage from file: {e}")
+            
             # Process images in batch mode if we have any to process
             if images_to_process:
                 logger.info(f"[{gid}] Processing {len(images_to_process)} images with Gemini 3 Flash Preview (batch API)...")
@@ -2718,6 +2729,16 @@ class WorkflowManager:
                 # Extract results and token usage from response (aggregated across all images in the group)
                 batch_results = batch_response.get("results", {}) if isinstance(batch_response, dict) else batch_response
                 token_usage_step1 = batch_response.get("token_usage") if isinstance(batch_response, dict) else None
+                
+                # Save token usage to file for future runs
+                if token_usage_step1 is not None:
+                    token_usage_file = os.path.join(out_dir, "step1_token_usage.json")
+                    try:
+                        with open(token_usage_file, 'w', encoding='utf-8') as f:
+                            json.dump(token_usage_step1, f, indent=2, ensure_ascii=False)
+                        logger.info(f"[{gid}] Saved Step 1 token usage to {token_usage_file}")
+                    except Exception as e:
+                        logger.warning(f"[{gid}] Failed to save Step 1 token usage to file: {e}")
                 
                 # Process results and apply Bayesian correction
                 if batch_results:
@@ -2814,8 +2835,24 @@ class WorkflowManager:
                         json.dump({"lines": corrected_lines}, f, indent=2, ensure_ascii=False)
             
             # Step 1 token usage is collected from batch post-correction if available
+            # If still None, try to load from master_record.json as a fallback
             if token_usage_step1 is None:
-                logger.info(f"[{gid}] Post-correction complete. Step 1 token usage not available from batch job.")
+                master_record_path = os.path.join(out_dir, "master_record.json")
+                if os.path.exists(master_record_path):
+                    try:
+                        with open(master_record_path, 'r', encoding='utf-8') as f:
+                            master_data = json.load(f)
+                            token_usage = master_data.get("token_usage", {})
+                            token_usage_step1 = token_usage.get("step1_diplomatic_transcription")
+                        if token_usage_step1:
+                            logger.info(f"[{gid}] Loaded Step 1 token usage from master_record.json")
+                    except Exception as e:
+                        logger.debug(f"[{gid}] Could not load token usage from master_record.json: {e}")
+                
+                if token_usage_step1 is None:
+                    logger.info(f"[{gid}] Post-correction complete. Step 1 token usage not available from batch job, saved file, or master record.")
+                else:
+                    logger.info(f"[{gid}] Post-correction complete. Step 1 token usage loaded from master record: {token_usage_step1}")
             else:
                 logger.info(f"[{gid}] Post-correction complete. Step 1 token usage collected: {token_usage_step1}")
 
