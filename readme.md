@@ -74,16 +74,18 @@ bash setup.sh
 ```
 
 This will create:
-- `venv_main/` - Main workflow environment
+- `venv_main/` - Main workflow environment (requires `requirements.txt`)
 - `venv_kraken/` - Kraken HTR environment  
 - `venv_pylaia/` - PyLaia HTR environment
+
+**Note**: The setup script expects a `requirements.txt` file for the main environment. If this file doesn't exist, you'll need to create it with the main project dependencies, or install them manually after creating the virtual environment.
 
 ### 3. Configure Settings
 
 Edit `workflow_manager/settings.py` to configure:
 
-- **API Keys**: Set `GEMINI_API_KEY` environment variable with a paid API key for Gemini 3 Flash Preview access
-- **Environment Paths**: Update `PYLAIA_ENV` and `KRAKEN_ENV` to match your virtual environment locations
+- **API Keys**: Set `GEMINI_API_KEY` environment variable with a paid API key for Gemini 3 Flash Preview access (recommended). Alternatively, you can set it directly in `settings.py`, but using an environment variable is more secure.
+- **Environment Paths**: Update `PYLAIA_ENV` and `KRAKEN_ENV` to match your virtual environment locations (default paths are in `~/.projects/`)
 - **Model Paths**: Ensure model files are in the `model_v10/` directory:
   - `epoch=322-lowest_va_cer.ckpt` (PyLaia checkpoint, CER 25.9%)
   - `syms.txt` (PyLaia symbols file)
@@ -130,6 +132,9 @@ python workflow_manager.py --force
 
 # Process without image uploads (text-only mode)
 python workflow_manager.py --no-images
+
+# Rerun from post-correction step (keeps Kraken/PyLaia results)
+python workflow_manager.py --rerun-from-post-pylaia
 
 # Specify custom input directory
 python workflow_manager.py --dir /path/to/images
@@ -278,6 +283,7 @@ latin_bho/
 ├── places_data.db             # Places reference database
 ├── cp40_surname_scraper_simple.py  # CP40 surname web scraper
 ├── cp40_full_scraper.py       # Full CP40 scraper
+├── requirements.txt           # Main project dependencies
 ├── requirements_kraken.txt    # Kraken dependencies
 ├── requirements_pylaia.txt    # PyLaia dependencies
 ├── requirements_scraper.txt   # Scraper dependencies
