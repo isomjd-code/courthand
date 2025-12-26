@@ -426,7 +426,7 @@ This project processes historical legal documents. When contributing:
 
 ## License
 
-[Specify license here]
+Copyright Joshua David Isom, 2025. All rights reserved.
 
 ## Acknowledgments
 
