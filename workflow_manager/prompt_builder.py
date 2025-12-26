@@ -734,6 +734,33 @@ def build_step4_prompt(
         - The occupation should be placed in TblAgent.Occupation field
         - If the text explicitly mentions an occupation for a person, you MUST extract it - do not leave it blank
         - If no occupation is mentioned in the text for a person, you may leave TblAgent.Occupation as null/empty
+        
+        **AGENT LOCATION EXTRACTION (CRITICAL):**
+        - **You MUST extract the location for EVERY person when it is mentioned in the text.**
+        - Look carefully for location information associated with each person's name, especially in the venue/identification section at the beginning of the case
+        - Common patterns to look for:
+          * "X de [Place]" (Latin: X of [Place]) - e.g., "Thomas Welleys de Sutht'" (Thomas Welleys of Sutton), "Joh'i Hampton de London" (John Hampton of London)
+          * "X of [Place]" (English translation) - e.g., "John Hampton of London"
+          * "X, [Place]" - e.g., "John Smith, London"
+          * Location information typically appears immediately after the person's name in the opening of the case
+        - Extract location information into TblAgent.LocationDetails object with the following structure:
+          * SpecificPlace: The specific place name (e.g., "Southampton", "London", "Sutton")
+          * County: The county name if mentioned or can be inferred (e.g., "Hampshire", "Yorkshire", "London")
+          * Parish: Parish name if mentioned (e.g., "parish of St. John Walbrook")
+          * Ward: Ward name if mentioned (for London locations, e.g., "Aldersgate Ward", "Cordwainer Street Ward")
+          * Country: Usually "England" for most cases, or as mentioned in the text
+        - When extracting locations:
+          * Use historically accurate place name normalization (see section 7 above for place name normalization rules)
+          * Map archaic/medieval spellings to modern equivalents (e.g., "Sutht'" → "Sutton", "Lond'" → "London")
+          * Infer the county when the place name clearly belongs to a specific county (e.g., "Southampton" → Hampshire, "York" → Yorkshire)
+          * For London, use "London" as the County value
+          * Extract parish and ward information if explicitly mentioned in the text
+        - **CRITICAL**: If location is mentioned in the text (even if abbreviated), you MUST extract it into TblAgent.LocationDetails - do not leave it blank
+        - If no location is mentioned in the text for a person, you may leave TblAgent.LocationDetails as null/empty
+        - Examples:
+          * "Thomas Welleys de Sutht'" → LocationDetails: {SpecificPlace: "Sutton", County: "Yorkshire" (or appropriate county)}
+          * "Joh'i Hampton de London" → LocationDetails: {SpecificPlace: "London", County: "London", Country: "England"}
+          * "John Smith of Southampton" → LocationDetails: {SpecificPlace: "Southampton", County: "Hampshire", Country: "England"}
 
         B. PARTY IDENTIFICATION AND AGENT ROLES (CRITICAL - MANDATORY)
         **CRITICAL: Agent roles are MANDATORY. Every agent extracted MUST have a TblAgentRole.role field populated.**
@@ -1102,8 +1129,9 @@ def build_step4_prompt(
             - The role field MUST be populated for every agent
             - Must be one of the enum values: "Plaintiff", "Defendant", "Debtor", "Creditor", "Attorney of plaintiff", "Attorney of defendant", "Surety for defendant", "Surety of Plaintiff", "Surety of law (compurgator)", "Executor", "Testator", "Witness", "Clerk", "Justice", "Juror", "Other", etc.
             - DO NOT leave any agent without a role - use "Other" if no specific role fits
-          * TblAgent: Object with Occupation, AgentStatus (optional)
+          * TblAgent: Object with Occupation, LocationDetails, AgentStatus (optional)
             - **Occupation: REQUIRED when mentioned in text** - Extract the occupation for each person if it can be determined from the text. Look for occupational terms like "mercer", "skinner", "husbandman", "prior", "citizen", etc. Extract EXACTLY as written. If multiple occupations/statuses are mentioned (e.g., "citizen and mercer"), extract all of them. If no occupation is mentioned in the text, you may leave this field as null/empty.
+            - **LocationDetails: REQUIRED when mentioned in text** - Extract location information for each person when it appears in the text. Look for patterns like "X de [Place]" or "X of [Place]" in the venue/identification section. Extract into LocationDetails object with SpecificPlace, County, Parish, Ward, and Country fields. Use historically accurate place name normalization. If no location is mentioned in the text, you may leave this field as null/empty.
           * TblAgentStatus: Object with AgentStatus (optional)
         
         - **DATE FIELDS**: All dates in EventDate[].Date and TblPostea[].Date should be in ISO format (YYYY-MM-DD) when possible.
@@ -1129,8 +1157,9 @@ def build_step4_prompt(
         17. ✓ **CRITICAL: Did I assign a TblAgentRole.role to EVERY agent in the Agents array? (This is MANDATORY - no agent can be without a role)**
         18. ✓ Did I identify ALL people mentioned in the text and extract them as agents with appropriate roles?
         19. ✓ **CRITICAL: Did I extract the occupation for EVERY person when it can be determined from the text? (Check TblAgent.Occupation field for each agent)**
+        20. ✓ **CRITICAL: Did I extract the location for EVERY person when it is mentioned in the text? (Check TblAgent.LocationDetails field for each agent - look for "X de [Place]" or "X of [Place]" patterns)**
         
-        If any answer is NO, go back and extract the missing information. Pay special attention to items 1-7 (metadata fields), item 8 (events - CRITICAL), items 17-18 (agent roles - CRITICAL), and item 19 (occupations - CRITICAL).
+        If any answer is NO, go back and extract the missing information. Pay special attention to items 1-7 (metadata fields), item 8 (events - CRITICAL), items 17-18 (agent roles - CRITICAL), item 19 (occupations - CRITICAL), and item 20 (locations - CRITICAL).
         """
 
     latin_section = f"\n        Latin Reference (for verification of legal terms like 'non est factum' or 'capiatur'):\n        {latin_text}" if latin_text else ""
