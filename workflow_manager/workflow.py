@@ -506,11 +506,12 @@ class WorkflowManager:
                 # Create active model directory if it doesn't exist
                 active_dir = Path(ACTIVE_MODEL_DIR)
                 active_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Active model directory created/verified: {active_dir.absolute()}")
                 
                 # Copy checkpoint to active directory
                 checkpoint_dest = active_dir / checkpoint.name
                 if not checkpoint_dest.exists() or checkpoint.stat().st_mtime > checkpoint_dest.stat().st_mtime:
-                    logger.info(f"Copying checkpoint to active model directory: {checkpoint.name}")
+                    logger.info(f"Copying checkpoint to active model directory: {checkpoint.name} -> {checkpoint_dest}")
                     shutil.copy2(checkpoint, checkpoint_dest)
                 else:
                     logger.debug(f"Checkpoint already up to date in active directory: {checkpoint.name}")
@@ -562,6 +563,7 @@ class WorkflowManager:
                     str(syms_dest)
                 )
                 logger.info(f"Using latest PyLaia model for HTR from active directory: {checkpoint.parent.name}/{checkpoint.name}")
+                logger.info(f"Active model files location: {active_dir.absolute()}")
             except Exception as e:
                 logger.warning(f"Failed to find latest PyLaia model: {e}. Falling back to hardcoded model_v10.")
                 # Fallback to hardcoded paths from settings
