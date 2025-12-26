@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import difflib
 import logging
 import re
@@ -216,6 +217,33 @@ def compare_field(
     if isinstance(ai_val, list):
         ai_val = ", ".join(sorted(ai_val))
 
+    # Special handling for Event Date: extract date from dict before string conversion
+    if field_name == "Event Date":
+        # Extract date from dictionary if present (AI extraction may return dict format)
+        if isinstance(ai_val, dict) and 'Date' in ai_val:
+            ai_val = ai_val['Date']
+        # Also handle string representation of dict (e.g., "{'Date': '1396-04-18', ...}")
+        elif isinstance(ai_val, str) and (ai_val.strip().startswith("{") or ai_val.strip().startswith("'")):
+            try:
+                parsed = ast.literal_eval(ai_val)
+                if isinstance(parsed, dict) and 'Date' in parsed:
+                    ai_val = parsed['Date']
+            except (ValueError, SyntaxError, TypeError):
+                # If parsing fails, use original value
+                pass
+        
+        # Extract date from GT if it's a dict (for consistency)
+        if isinstance(gt_val, dict) and 'Date' in gt_val:
+            gt_val = gt_val['Date']
+        elif isinstance(gt_val, str) and (gt_val.strip().startswith("{") or gt_val.strip().startswith("'")):
+            try:
+                parsed = ast.literal_eval(gt_val)
+                if isinstance(parsed, dict) and 'Date' in parsed:
+                    gt_val = parsed['Date']
+            except (ValueError, SyntaxError, TypeError):
+                # If parsing fails, use original value
+                pass
+
     gt_str = str(gt_val).strip() if gt_val is not None else ""
     ai_str = str(ai_val).strip() if ai_val is not None else ""
 
@@ -265,6 +293,7 @@ def compare_field(
                 return comparison
         # If soundex doesn't match, continue with normal comparison using normalized strings
     elif field_name == "Event Date":
+        # Dates have already been extracted from dictionaries above
         gt_str_normalized = normalize_date_for_comparison(gt_str)
         ai_str_normalized = normalize_date_for_comparison(ai_str)
         # If normalized dates are identical, treat as 100% match
