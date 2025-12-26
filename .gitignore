@@ -1,0 +1,23 @@
+# 1. Ignore everything by default
+*
+
+# 2. Allow Git to look into directories (necessary for recursion)
+!*/
+
+# 3. EXCLUDE the venv directory specifically
+# Because this comes AFTER !*/, it overrides it for this specific folder.
+# Because the folder is now ignored, Git will NOT look inside for .py files.
+venv/
+bootstrap_training_data/
+
+# 4. Track specific file types everywhere else
+!*.py
+!*.sh
+!*.html
+!*.md
+
+# 5. Track .txt files only in the root directory
+!/*.txt
+
+# 6. Ensure .gitignore itself is tracked
+!.gitignore
