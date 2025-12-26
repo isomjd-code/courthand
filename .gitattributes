@@ -1,3 +1,4 @@
 cp40_records.db filter=lfs diff=lfs merge=lfs -text
 cp40_database_new.sqlite filter=lfs diff=lfs merge=lfs -text
-
+# Track .ckpt files with Git LFS
+*.ckpt filter=lfs diff=lfs merge=lfs -text

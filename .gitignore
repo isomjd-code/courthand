@@ -28,3 +28,10 @@ bootstrap_training_data/
 # 8. Track specific database files with Git LFS
 !cp40_records.db
 !cp40_database_new.sqlite
+
+# 9. Track workflow_active_model directory and its contents
+!workflow_active_model/
+!workflow_active_model/*.txt
+!workflow_active_model/*.ckpt
+!workflow_active_model/model
+!*.ckpt
