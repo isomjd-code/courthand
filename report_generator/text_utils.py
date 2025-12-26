@@ -211,6 +211,27 @@ def format_location(loc_obj: Union[Dict, str]) -> str:
     return ", ".join(filter(None, parts))
 
 
+def is_generic_location(loc_str: str) -> bool:
+    """
+    Check if a location string is too generic to be meaningful for comparison.
+    
+    Returns True if the location is just "England" or similar generic values.
+    """
+    if not loc_str:
+        return False
+    # Normalize: lowercase, strip whitespace
+    normalized = loc_str.strip().lower()
+    # Check if it's just "England" or "england" (with or without comma)
+    generic_locations = ["england", "england,", ", england"]
+    # Check if it's exactly "England" or starts/ends with just "England"
+    if normalized == "england":
+        return True
+    # Check if it's "England" with only commas/whitespace
+    if normalized.replace(",", "").replace(" ", "").strip() == "england":
+        return True
+    return False
+
+
 def split_into_sentences(items: List[Dict], key: str) -> List[str]:
     """Consolidate text and split into logical sentences."""
     full_text = " ".join(str(item.get(key, "")) for item in items if item.get(key))

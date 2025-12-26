@@ -40,6 +40,7 @@ from .text_utils import (
     format_location,
     get_full_date_string,
     get_person_name,
+    is_generic_location,
     normalize_string,
 )
 
@@ -1802,13 +1803,14 @@ def _generate_individuals_table(
             ai_name = get_person_name(ai_agent)
             name_display = f"\\ailabel~{clean_text_for_xelatex(ai_name)}"
             ai_location = format_location(ai_agent.get("TblAgent", {}).get("LocationDetails"))
+            location_display = f"\\ailabel~{clean_text_for_xelatex(ai_location)}" if ai_location else r"\textit{N/A}"
             
             latex.append(
                 f"{name_display} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgent', {}).get('Occupation'))} & "
                 f"\\ailabel~{clean_text_for_xelatex(ai_agent.get('TblAgentRole', {}).get('role'))} & "
-                f"\\ailabel~{clean_text_for_xelatex(ai_location)} \\\\ \\hline"
+                f"{location_display} \\\\ \\hline"
             )
         latex.append(r"\end{longtable}")
         return latex
@@ -1817,12 +1819,16 @@ def _generate_individuals_table(
         # No AI agents, show all GT agents
         for gt_agent in gt_agents:
             gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
+            if is_generic_location(gt_location):
+                location_display = r"\textit{N/A}"
+            else:
+                location_display = f"\\gtlabel~{clean_text_for_xelatex(gt_location)}"
             latex.append(
                 f"\\gtlabel~{clean_text_for_xelatex(get_person_name(gt_agent))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgent', {}).get('Occupation'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} & "
-                f"\\gtlabel~{clean_text_for_xelatex(gt_location)} \\\\ \\hline"
+                f"{location_display} \\\\ \\hline"
             )
         latex.append(r"\end{longtable}")
         return latex
@@ -1894,31 +1900,40 @@ def _generate_individuals_table(
                 metrics,
                 api_key=api_key,
             )
-            # Compare agent location
+            # Compare agent location (skip if GT location is just "England")
             gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
-            ai_location = format_location(ai_agent.get("TblAgent", {}).get("LocationDetails"))
-            location_comp = compare_field(
-                gt_location,
-                ai_location,
-                "Agent Location",
-                "Agents",
-                metrics,
-                api_key=api_key,
-            )
+            if is_generic_location(gt_location):
+                # Skip comparison and display for generic locations
+                location_display = r"\textit{N/A}"
+            else:
+                ai_location = format_location(ai_agent.get("TblAgent", {}).get("LocationDetails"))
+                location_comp = compare_field(
+                    gt_location,
+                    ai_location,
+                    "Agent Location",
+                    "Agents",
+                    metrics,
+                    api_key=api_key,
+                )
+                location_display = format_comparison_cell(location_comp)
             latex.append(
                 f"{name_display} & {format_comparison_cell(status_comp)} & "
                 f"{format_comparison_cell(occ_comp)} & {format_comparison_cell(role_comp)} & "
-                f"{format_comparison_cell(location_comp)} \\\\ \\hline"
+                f"{location_display} \\\\ \\hline"
             )
         else:
             # Similarity too low, treat as unmatched GT
             gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
+            if is_generic_location(gt_location):
+                location_display = r"\textit{N/A}"
+            else:
+                location_display = f"\\gtlabel~{clean_text_for_xelatex(gt_location)}"
             latex.append(
                 f"\\gtlabel~{clean_text_for_xelatex(get_person_name(gt_agent))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgent', {}).get('Occupation'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} & "
-                f"\\gtlabel~{clean_text_for_xelatex(gt_location)} \\\\ \\hline"
+                f"{location_display} \\\\ \\hline"
             )
             matched_ai_indices.discard(ai_idx)  # Don't count as matched
     
@@ -1927,12 +1942,16 @@ def _generate_individuals_table(
     for i, gt_agent in enumerate(gt_agents):
         if i not in matched_gt_indices:
             gt_location = format_location(gt_agent.get("TblAgent", {}).get("LocationDetails"))
+            if is_generic_location(gt_location):
+                location_display = r"\textit{N/A}"
+            else:
+                location_display = f"\\gtlabel~{clean_text_for_xelatex(gt_location)}"
             latex.append(
                 f"\\gtlabel~{clean_text_for_xelatex(get_person_name(gt_agent))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentStatus', {}).get('AgentStatus'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgent', {}).get('Occupation'))} & "
                 f"\\gtlabel~{clean_text_for_xelatex(gt_agent.get('TblAgentRole', {}).get('role'))} & "
-                f"\\gtlabel~{clean_text_for_xelatex(gt_location)} \\\\ \\hline"
+                f"{location_display} \\\\ \\hline"
             )
 
     # Process unmatched AI agents
