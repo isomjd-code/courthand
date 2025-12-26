@@ -769,7 +769,12 @@ def build_step4_prompt(
         - **Juror**: Member of the jury
         - **Essoin of plaintiff**: Person who provides an excuse for the plaintiff's absence
         - **Essoin of defendant**: Person who provides an excuse for the defendant's absence
-        - **Accessory**: Person who assisted in a crime or wrong
+        - **Accessory**: Person who assisted in a crime or wrong. **CRITICAL: Use this role when:**
+          * A person is mentioned as committing a wrong together with the defendant (e.g., "John W., with John R. and John Mayhewe, committed housebreaking")
+          * A person is described as participating in the same criminal act or trespass as the defendant
+          * Multiple people are named together in the narratio (plaintiff's claim) as committing the same wrong
+          * Examples: "together with [Name]", "with [Name]", "[Defendant] and [Name] broke into", "[Defendant] together with [Name] assaulted"
+          * **DO NOT use "Other" for people who assisted in crimes - use "Accessory" instead**
         - **Administrator**: Person who administers an estate
         - **Arbitrator**: Person who arbitrates a dispute
         - **Auditor**: Person who audits accounts
@@ -796,8 +801,9 @@ def build_step4_prompt(
         - Read the ENTIRE text carefully to identify ALL people mentioned
         - For each person, determine their role based on context and relation to other parties
         - **For attorneys**: Always extract their relationship to their principal (plaintiff/defendant) - do NOT use generic "attorney" occupation alone
+        - **For accessories in trespass cases**: When multiple people are mentioned together as committing a wrong (e.g., "John W., with John R. and John Mayhewe, broke into the house"), the defendant is "Defendant" and the others are "Accessory" - NOT "Other"
         - If a person appears multiple times with different roles, create separate agent entries for each role
-        - When in doubt about a role, choose the most specific role that fits (e.g., "Debtor" is more specific than "Other")
+        - When in doubt about a role, choose the most specific role that fits (e.g., "Accessory" is more specific than "Other" for people who assisted in crimes)
         - DO NOT leave any agent without a role - this is a critical validation requirement
 
         C. WRIT TYPE CLASSIFICATION (REQUIRED FIELD)
