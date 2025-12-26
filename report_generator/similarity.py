@@ -525,9 +525,9 @@ def compare_field(
     elif field_name == "Agent Location" and gt_str and not ai_str:
         # Normalize GT string for comparison (lowercase, remove extra whitespace)
         gt_normalized = " ".join(gt_str.lower().split())
-        # Check if GT starts with "london" and optionally contains ", england" or ",england"
+        # Check if GT is exactly "london" or starts with "london," and contains "england"
         # This handles variations like "london", "london, england", "london,england", "london, England", etc.
-        if gt_normalized == "london" or gt_normalized.startswith("london,") and "england" in gt_normalized:
+        if gt_normalized == "london" or (gt_normalized.startswith("london,") and "england" in gt_normalized):
             similarity = 1.0  # Perfect match (no penalty)
             is_match = True
         else:
