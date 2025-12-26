@@ -320,8 +320,32 @@ def compare_field(
     # Get field-specific threshold
     field_threshold = get_field_threshold(field_name, category)
     
-    # Special case: Case Type - if GT contains "Detention" and AI is "Detinue", treat as 100% match
+    # Special case: Case Type - if first word matches, treat as 100% match
     if field_name == "Case Type" and gt_str and ai_str:
+        # Extract first word from each string (handle comma-separated lists)
+        gt_first_word = gt_str.split(',')[0].split()[0] if gt_str.split(',')[0].split() else ""
+        ai_first_word = ai_str.split(',')[0].split()[0] if ai_str.split(',')[0].split() else ""
+        
+        # Normalize: lowercase, strip punctuation/whitespace, keep only alphanumeric
+        gt_first_normalized = "".join(c.lower() for c in gt_first_word if c.isalnum())
+        ai_first_normalized = "".join(c.lower() for c in ai_first_word if c.isalnum())
+        
+        # If first normalized words match, treat as 100% match
+        if gt_first_normalized and ai_first_normalized and gt_first_normalized == ai_first_normalized:
+            similarity = 1.0
+            is_match = True
+            comparison = FieldComparison(
+                field_name=field_name,
+                gt_value=gt_str,
+                ai_value=ai_str,
+                is_match=is_match,
+                similarity_score=similarity,
+                category=category,
+            )
+            metrics.add(comparison)
+            return comparison
+        
+        # Also check: if GT contains "Detention" and AI is "Detinue", treat as 100% match
         gt_lower = gt_str.lower()
         ai_lower = ai_str.lower()
         if "detention" in gt_lower and ai_lower == "detinue":

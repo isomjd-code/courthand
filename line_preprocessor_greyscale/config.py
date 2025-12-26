@@ -6,7 +6,7 @@ from __future__ import annotations
 MIN_LINE_HEIGHT = 8
 """Minimum height in pixels for a valid line image."""
 
-MIN_LINE_WIDTH = 15
+MIN_LINE_WIDTH = 8
 """Minimum width in pixels for a valid line image."""
 
 FINAL_LINE_HEIGHT = 128
