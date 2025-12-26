@@ -81,6 +81,70 @@ def get_cp40_info(roll_number: str) -> Optional[Dict[str, str]]:
     return None
 
 
+def repair_json_string(json_str: str) -> str:
+    """
+    Attempt to repair common JSON malformations.
+    
+    Fixes issues like:
+    - Closing parentheses ')' instead of closing braces '}'
+    - Missing closing brackets/braces
+    - Trailing commas before closing brackets/braces
+    
+    Args:
+        json_str: Potentially malformed JSON string.
+        
+    Returns:
+        Repaired JSON string (may still be invalid if issues are too severe).
+    """
+    if not json_str:
+        return json_str
+    
+    # Count braces and brackets to detect imbalances
+    brace_count = json_str.count('{') - json_str.count('}')
+    bracket_count = json_str.count('[') - json_str.count(']')
+    
+    result = json_str
+    
+    # Fix closing parentheses that should be closing braces
+    # This handles cases where the JSON ends with ) instead of }
+    if brace_count > 0:
+        # Find the last closing parenthesis that might be a misplaced brace
+        # Work backwards from the end
+        lines = result.split('\n')
+        braces_fixed = 0
+        
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            stripped = line.rstrip()
+            
+            # If line ends with ) and we still need to fix braces
+            if stripped.endswith(')') and braces_fixed < brace_count:
+                # Replace the last ) with }
+                lines[i] = line[:-1] + '}'
+                braces_fixed += 1
+                if braces_fixed >= brace_count:
+                    break
+        
+        if braces_fixed > 0:
+            result = '\n'.join(lines)
+            # Recalculate counts after fixing
+            brace_count = result.count('{') - result.count('}')
+            bracket_count = result.count('[') - result.count(']')
+    
+    # Remove trailing commas before closing brackets/braces
+    result = re.sub(r',(\s*[}\]])', r'\1', result)
+    
+    # Add missing closing brackets/braces at the end
+    result = result.rstrip()
+    # Add braces first (inner structures), then brackets (outer structures)
+    if brace_count > 0:
+        result += '\n' + '}' * brace_count
+    if bracket_count > 0:
+        result += '\n' + ']' * bracket_count
+    
+    return result
+
+
 def clean_json_string(text: str) -> str:
     """
     Extract JSON content from text that may contain markdown code blocks.

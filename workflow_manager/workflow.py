@@ -63,7 +63,7 @@ from .settings import (
     WORK_DIR,
     logger,
 )
-from .utils import clean_json_string, get_cp40_info
+from .utils import clean_json_string, get_cp40_info, repair_json_string
 
 class WorkflowManager:
     """
@@ -2879,7 +2879,50 @@ class WorkflowManager:
                     logger.warning(f"[{gid}] Failed to save raw response: {e}")
                 
                 cleaned_json = clean_json_string(raw_json_2a)
-                data_2a = json.loads(cleaned_json)
+                
+                # Try to parse JSON, with repair attempt if it fails
+                try:
+                    data_2a = json.loads(cleaned_json)
+                except json.JSONDecodeError as e:
+                    # Save cleaned (but malformed) JSON for debugging
+                    cleaned_json_path = os.path.join(out_dir, "step2a_cleaned_json_debug.json")
+                    try:
+                        with open(cleaned_json_path, 'w', encoding='utf-8') as f:
+                            f.write(cleaned_json)
+                        logger.warning(
+                            f"[{gid}] JSON parsing failed at line {e.lineno}, column {e.colno} (char {e.pos}): {e.msg}. "
+                            f"Cleaned JSON saved to {cleaned_json_path}. Attempting to repair..."
+                        )
+                    except Exception as save_error:
+                        logger.warning(f"[{gid}] Failed to save cleaned JSON: {save_error}")
+                    
+                    # Try to repair the JSON
+                    repaired_json = repair_json_string(cleaned_json)
+                    try:
+                        data_2a = json.loads(repaired_json)
+                        logger.info(f"[{gid}] Successfully repaired and parsed JSON after initial failure")
+                    except json.JSONDecodeError as repair_error:
+                        # Save repaired JSON for debugging
+                        repaired_json_path = os.path.join(out_dir, "step2a_repaired_json_debug.json")
+                        try:
+                            with open(repaired_json_path, 'w', encoding='utf-8') as f:
+                                f.write(repaired_json)
+                            logger.error(
+                                f"[{gid}] JSON repair failed at line {repair_error.lineno}, column {repair_error.colno} "
+                                f"(char {repair_error.pos}): {repair_error.msg}. "
+                                f"Repaired JSON saved to {repaired_json_path}, raw response saved to {raw_response_path}"
+                            )
+                        except Exception as save_error2:
+                            logger.error(f"[{gid}] Failed to save repaired JSON: {save_error2}")
+                        
+                        raise json.JSONDecodeError(
+                            f"JSON parsing failed even after repair attempt. Original error: {e.msg} "
+                            f"(line {e.lineno}, col {e.colno}, char {e.pos}). "
+                            f"Repair error: {repair_error.msg} (line {repair_error.lineno}, col {repair_error.colno}, "
+                            f"char {repair_error.pos}). Raw response saved to {raw_response_path}",
+                            repaired_json,
+                            repair_error.pos
+                        )
                 
                 # Handle case where data_2a is a list instead of dict
                 if isinstance(data_2a, list):
