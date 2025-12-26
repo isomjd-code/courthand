@@ -21,3 +21,10 @@ bootstrap_training_data/
 
 # 6. Ensure .gitignore itself is tracked
 !.gitignore
+
+# 7. Track .gitattributes for Git LFS configuration
+!.gitattributes
+
+# 8. Track specific database files with Git LFS
+!cp40_records.db
+!cp40_database_new.sqlite

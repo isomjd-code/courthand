@@ -34,6 +34,10 @@ PYLAIA_MODEL = os.path.join(MODEL_DIR, "epoch=322-lowest_va_cer.ckpt") #CER of 2
 PYLAIA_SYMS = os.path.join(MODEL_DIR, "syms.txt")
 PYLAIA_ARCH = os.path.join(MODEL_DIR, "model")
 
+# ACTIVE MODEL DIRECTORY - where the latest bootstrap model is copied for use
+ACTIVE_MODEL_DIR = os.path.join(BASE_DIR, "workflow_active_model")
+ACTIVE_MODEL_DIR = os.path.abspath(ACTIVE_MODEL_DIR)
+
 # LLM CONFIGURATION
 # Gemini 3 Flash Preview API key - set via environment variable GEMINI_API_KEY (paid key required)
 GEMINI_API_KEY = "AIzaSyBmFe4P5cV1L7L5EmjLVC32AQiTQHmgJ7A"

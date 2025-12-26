@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import time
 import signal
 import platform
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from google import genai
@@ -41,6 +43,7 @@ from .schemas import (
     get_merged_diplomatic_schema,
 )
 from .settings import (
+    ACTIVE_MODEL_DIR,
     API_MAX_RETRIES,
     API_RETRY_DELAY,
     API_TIMEOUT,
@@ -490,6 +493,8 @@ class WorkflowManager:
     def _get_latest_pylaia_model_paths(self) -> Tuple[str, str, str]:
         """
         Get the latest PyLaia model paths from bootstrap_training_data/pylaia_models.
+        Copies the latest model (checkpoint, model file, and syms.txt) to the active model directory
+        and uses those paths for subsequent work.
         
         Returns:
             A tuple of (checkpoint_path, model_arch_path, syms_path) as strings.
@@ -497,12 +502,66 @@ class WorkflowManager:
         if self._pylaia_model_paths is None:
             try:
                 checkpoint, model_file, syms_file = find_latest_pylaia_model()
+                
+                # Create active model directory if it doesn't exist
+                active_dir = Path(ACTIVE_MODEL_DIR)
+                active_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Copy checkpoint to active directory
+                checkpoint_dest = active_dir / checkpoint.name
+                if not checkpoint_dest.exists() or checkpoint.stat().st_mtime > checkpoint_dest.stat().st_mtime:
+                    logger.info(f"Copying checkpoint to active model directory: {checkpoint.name}")
+                    shutil.copy2(checkpoint, checkpoint_dest)
+                else:
+                    logger.debug(f"Checkpoint already up to date in active directory: {checkpoint.name}")
+                
+                # Copy model file to active directory (handle both file and directory cases)
+                model_dest = active_dir / "model"
+                model_path = Path(model_file)
+                if model_path.is_dir():
+                    # If model is a directory, use copytree
+                    # Check if we need to update by comparing source directory mtime
+                    needs_update = True
+                    if model_dest.exists() and model_dest.is_dir():
+                        try:
+                            source_mtime = model_path.stat().st_mtime
+                            dest_mtime = model_dest.stat().st_mtime
+                            if source_mtime <= dest_mtime:
+                                needs_update = False
+                        except (OSError, AttributeError):
+                            # If we can't compare, update anyway
+                            needs_update = True
+                    
+                    if needs_update:
+                        if model_dest.exists():
+                            shutil.rmtree(model_dest)
+                        logger.info(f"Copying model directory to active model directory")
+                        shutil.copytree(model_path, model_dest)
+                    else:
+                        logger.debug(f"Model directory already up to date in active directory")
+                else:
+                    # If model is a file, use copy2
+                    if not model_dest.exists() or model_path.stat().st_mtime > model_dest.stat().st_mtime:
+                        logger.info(f"Copying model file to active model directory")
+                        shutil.copy2(model_path, model_dest)
+                    else:
+                        logger.debug(f"Model file already up to date in active directory")
+                
+                # Copy syms.txt to active directory
+                syms_dest = active_dir / "syms.txt"
+                if not syms_dest.exists() or syms_file.stat().st_mtime > syms_dest.stat().st_mtime:
+                    logger.info(f"Copying syms.txt to active model directory")
+                    shutil.copy2(syms_file, syms_dest)
+                else:
+                    logger.debug(f"syms.txt already up to date in active directory")
+                
+                # Use paths from active directory
                 self._pylaia_model_paths = (
-                    str(checkpoint),
-                    str(model_file),
-                    str(syms_file)
+                    str(checkpoint_dest),
+                    str(model_dest),
+                    str(syms_dest)
                 )
-                logger.info(f"Using latest PyLaia model for HTR: {checkpoint.parent.name}/{checkpoint.name}")
+                logger.info(f"Using latest PyLaia model for HTR from active directory: {checkpoint.parent.name}/{checkpoint.name}")
             except Exception as e:
                 logger.warning(f"Failed to find latest PyLaia model: {e}. Falling back to hardcoded model_v10.")
                 # Fallback to hardcoded paths from settings
