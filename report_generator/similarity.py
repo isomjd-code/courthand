@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -305,7 +306,35 @@ def compare_field(
                 )
                 metrics.add(comparison)
                 return comparison
-        # If first word doesn't match, continue with normal comparison
+            
+            # Special case: if GT and AI have a common word that is 4 or more letters, treat as 100% match
+            # This handles cases like "St John Zachary, Alders-gate Ward, L..." vs "London, parish of St. John Zachary ..."
+            # Split both strings into words and normalize
+            gt_words = re.findall(r'\b\w+\b', gt_str.lower())
+            ai_words = re.findall(r'\b\w+\b', ai_str.lower())
+            
+            # Filter to only words with 4+ letters
+            gt_words_long = [w for w in gt_words if len(w) >= 4]
+            ai_words_long = [w for w in ai_words if len(w) >= 4]
+            
+            # Check if there's at least one common word with 4+ letters
+            if gt_words_long and ai_words_long:
+                matching_words = set(gt_words_long) & set(ai_words_long)
+                if matching_words:
+                    # Found at least one common word with 4+ letters - treat as 100% match
+                    similarity = 1.0
+                    is_match = True
+                    comparison = FieldComparison(
+                        field_name=field_name,
+                        gt_value=gt_str,
+                        ai_value=ai_str,
+                        is_match=is_match,
+                        similarity_score=similarity,
+                        category=category,
+                    )
+                    metrics.add(comparison)
+                    return comparison
+        # If first word doesn't match and no common word of 4+ letters found, continue with normal comparison
         gt_str_normalized = gt_str
         ai_str_normalized = ai_str
     elif field_name == "Damages Claimed":
