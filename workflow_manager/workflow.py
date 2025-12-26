@@ -611,7 +611,8 @@ class WorkflowManager:
 
             if not os.path.exists(kraken_json): return kraken_json, htr_res
 
-            cmd_preprocess = f"source {PYLAIA_ENV} && python3 preprocess_lines_greyscale.py '{image_path}' '{kraken_json}' '{lines_dir}' '{list_txt}'"
+            preprocess_script = os.path.join(BASE_DIR, "preprocess_lines_greyscale.py")
+            cmd_preprocess = f"source {PYLAIA_ENV} && python3 '{preprocess_script}' '{image_path}' '{kraken_json}' '{lines_dir}' '{list_txt}'"
             self._run_command(cmd_preprocess, "Preprocess Lines")
 
             if os.path.exists(list_txt) and os.path.getsize(list_txt) > 0:
