@@ -3212,7 +3212,7 @@ class WorkflowManager:
                         response_schema=get_final_index_schema(),
                         temperature=0.0,
                         max_output_tokens=64000,
-                        thinking_config=types.ThinkingConfig(include_thoughts=True, thinking_level="LOW")
+                        thinking_config=types.ThinkingConfig(include_thoughts=True, thinking_level="MEDIUM")
                     ),
                     log_filepath=os.path.join(out_dir, "step4_thoughts.log"),
                     batch_key=f"{gid}_step4",

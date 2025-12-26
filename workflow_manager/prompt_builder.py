@@ -629,6 +629,15 @@ def build_step4_prompt(
             
             NOTE: This county was extracted from the marginal annotation at the start of the text.
             Use this value for the County field in TblReference and TblCase. This is authoritative."""
+        elif county_source == "not_found" or county_name == "UNKNOWN":
+            county_note += """
+            
+            **CRITICAL: County Identification Priority**
+            Since no marginal county was found, you MUST extract the county from the venue line in the text:
+            - Look for: "X summonitus fuit ad respondendum Y de [County]" (X was summoned to answer Y concerning [County])
+            - The county in the venue line is the authoritative source when marginal annotation is missing
+            - Do NOT default to a common location or assume the county
+            - If the venue line specifies a county, use that value for TblReference.County and TblCase.County"""
         
         metadata_parts.append(county_note)
     
@@ -676,14 +685,40 @@ def build_step4_prompt(
            - If you see "Mich'lus" in Latin → Extract as "Michael" (NOT "Nicholas")
            - Cross-reference with the Latin text provided to verify names
         
-        3. **SURNAME ACCURACY:**
+        3. **PALEOGRAPHIC CHARACTER DISAMBIGUATION (CAPITAL LETTERS) - CRITICAL:**
+           **The HTR model may confuse similar capital letters in "Court Hand" script. Pay careful attention to:**
+           - **C vs. R/G**: Capital C can be misread as R or G (e.g., "Walter Cok" might be misread as "Walter Roke")
+           - **G vs. C**: Capital G can be misread as C (e.g., "Richard Goold" might be misread as "Richard Coolde")
+           - **K vs. H**: Capital K can be misread as H (e.g., "Robert Kelme" might be misread as "Robert Holme")
+           - **Extraction rules**:
+             * When extracting surnames, carefully distinguish these similar capital letters
+             * Use context clues (known surnames, place names, other mentions) to resolve ambiguities
+             * If uncertain, preserve the original transcription but flag for review
+             * Cross-reference with the Latin text and other mentions of the same name in the document
+        
+        4. **SURNAME ACCURACY:**
            - "Sauvage" and "Stannage" are DIFFERENT surnames - extract exactly as written
            - "Mymmes" and "Symmers" are DIFFERENT surnames - extract exactly as written
            - Extract surnames EXACTLY as they appear in the text, do not substitute similar-sounding names
            - If uncertain, use the name from the Latin text (provided in Latin Reference section)
         
-        4. Aliases: If text says "[NAME1] alias [NAME2]", record BOTH.
-        5. Status/Occupation: Extract EXACTLY as found (e.g., "citizen and mercer", "husbandman"). Always capture "citizen".
+        5. Aliases: If text says "[NAME1] alias [NAME2]", record BOTH.
+        6. Status/Occupation: Extract EXACTLY as found (e.g., "citizen and mercer", "husbandman"). Always capture "citizen".
+        
+        7. **HISTORICAL PLACE NAME NORMALIZATION (GAZETTEER INTEGRATION) - CRITICAL:**
+           **CRITICAL: Map archaic/medieval spellings to historically accurate modern equivalents**
+           - Do NOT simply use phonetically similar modern place names
+           - Use historical knowledge and context to map archaic spellings correctly
+           - Examples:
+             * "Yerdele" → "Yeovil" (NOT "Yardley") - historical spelling of Yeovil, Somerset
+             * "Northflete" → "Northfleet" - normalize spelling but keep historical form if appropriate
+             * "Wrangle" → "Wrangle" (keep as is if correct historical spelling)
+           - **Extraction rules**:
+             * When anglicizing place names, use the historically accurate modern equivalent
+             * Cross-reference with known historical place names for the region and era
+             * If uncertain between multiple candidates, prefer the one that matches the historical context
+             * Consider the county and region context when normalizing place names
+             * Do NOT default to the most phonetically similar modern town name
         
         **OCCUPATION EXTRACTION (CRITICAL):**
         - **You MUST extract the occupation for EVERY person when it can be determined from the text.**
@@ -742,9 +777,25 @@ def build_step4_prompt(
         - **Official**: Court official or other official
         - **Other**: Use only when no other role fits (but you MUST assign a role)
         
+        **CRITICAL: Role Inference - Agent Relationships (Attorney Roles)**
+        - **When you see "attorney" or "attornatum suum" (his attorney), you MUST link the attorney to their principal**
+        - **Relation extraction rules**:
+          * Look for patterns like: "per J. Cook attornatum suum" (by J. Cook his attorney)
+          * The word "suum" (his) refers back to the subject of the sentence (plaintiff or defendant)
+          * If the sentence structure is "[Plaintiff/Defendant] appeared per [Attorney Name] attornatum suum"
+            → Extract the attorney with role "Attorney of [plaintiff/defendant]" (matching the principal)
+          * If the text says "attorney of [Name]" explicitly, link it to that person
+          * If context shows an attorney appearing for a specific party, assign the appropriate role
+        - **DO NOT extract "attorney" as a generic occupation without linking it to a role**
+        - **Examples**:
+          * "John Smith appeared per J. Cook attornatum suum" (John Smith is defendant, J. Cook is Attorney of defendant)
+          * "Plaintiff appeared by attorney, J. Cook" → J. Cook is "Attorney of plaintiff"
+          * "Defendant appeared by attorney, J. Cook" → J. Cook is "Attorney of defendant"
+        
         **EXTRACTION RULES:**
         - Read the ENTIRE text carefully to identify ALL people mentioned
-        - For each person, determine their role based on context
+        - For each person, determine their role based on context and relation to other parties
+        - **For attorneys**: Always extract their relationship to their principal (plaintiff/defendant) - do NOT use generic "attorney" occupation alone
         - If a person appears multiple times with different roles, create separate agent entries for each role
         - When in doubt about a role, choose the most specific role that fits (e.g., "Debtor" is more specific than "Other")
         - DO NOT leave any agent without a role - this is a critical validation requirement
@@ -752,6 +803,12 @@ def build_step4_prompt(
         C. WRIT TYPE CLASSIFICATION (REQUIRED FIELD)
         **CRITICAL: WritType is a REQUIRED field in the schema. You MUST populate it.**
         **CRITICAL: Schema location: TblCase.WritType (this is a REQUIRED STRING field)**
+        
+        **IMPORTANT DISTINCTION: Writ vs. Case Type**
+        - **WritType**: The form of action (the legal category of the writ). This is what you extract here.
+        - **CaseType** (see section G): The specific facts/sub-categories within the writ (the plea/narratio details). 
+          For example, a WritType of "Trespass" may have CaseType of "Assault" or "Housebreaking". 
+          A WritType of "Debt" may have CaseType of "Loan" or "Bond".
         
         Classify the writ type based on keywords in the text:
         - "Debt": Look for "plea that he render [money/chattels/grain]", "writing obligatory", "bond", "owes", "obligation"
@@ -766,6 +823,7 @@ def build_step4_prompt(
         - Look for explicit writ type mentions: "writ of debt", "writ of trespass", etc.
         - If writ type is not explicitly stated, infer it from the nature of the claim (e.g., "force and arms" → "Trespass")
         - **SCHEMA REQUIREMENT**: This field MUST be present in the JSON output and cannot be empty
+        - **NOTE**: After identifying the WritType, you MUST ALSO extract the specific CaseType (sub-category) in section G below by analyzing the narratio (the facts of the case)
 
         D. EVENT & DATE EXTRACTION (CRITICAL - MANDATORY)
         **CRITICAL: TblEvents is MANDATORY and must contain at least one entry when events are mentioned in the text.**
@@ -811,29 +869,50 @@ def build_step4_prompt(
         7. **CRITICAL**: If the text mentions events like "bond made on [date] at [place]" or "accounting at [place] on [date]", you MUST extract them - do not skip events
         
         **DATE CONVERSION REQUIREMENTS:**
+        **CRITICAL: Regnal Year Date Conversion with Accurate Feast Day Calculation**
+        
         1. *Convert Regnal Years* (e.g., "6 Henry VI") to calendar years using the provided metadata context.
+           - Use the Regnal Year and Calendar Year from the metadata to calculate dates accurately
+           - For Henry IV (1399-1413): Year 1 = 1399 (starting Sept 30), Year 2 = 1400, etc.
+           - For Henry V (1413-1422): Year 1 = 1413 (starting March 21), Year 2 = 1414, etc.
+           - For Henry VI (1422-1461): Year 1 = 1422 (starting Sept 1), Year 2 = 1423, etc.
+        
         2. *Convert Medieval Feast Days to ISO Dates (YYYY-MM-DD)*:
            - When you encounter feast dates like "feast of St. Michael" or "in festo sancti Michaelis", convert them to ISO format
-           - Common feast dates:
+           - **Fixed feast dates** (same calendar date every year):
              * St. Michael (Michaelmas): September 29
              * St. John the Baptist: June 24
              * St. Martin: November 11
              * Purification of the Virgin Mary (Candlemas): February 2
              * Annunciation of the Virgin Mary (Lady Day): March 25
-             * Easter: Variable (moveable feast - use approximate date or note "Easter [year]")
-             * Pentecost (Whitsun): Variable (7 weeks after Easter)
              * All Saints: November 1
              * St. Thomas the Apostle: December 21
              * Nativity (Christmas): December 25
              * Epiphany: January 6
+           
+           - **Moveable feasts** (depend on Easter date for that year):
+             * Easter: Variable (calculate based on regnal year calendar)
+             * Pentecost (Whitsun): Variable (7 weeks after Easter = 49 days after)
              * Ascension: Variable (40 days after Easter)
-             * Trinity Sunday: Variable (first Sunday after Pentecost)
+             * Trinity Sunday: Variable (first Sunday after Pentecost = 56 days after Easter)
+           
+           - **CRITICAL**: For moveable feasts, you MUST use the correct Easter date for the specific regnal year
+           - **CRITICAL**: Easter dates vary by year - do NOT use a generic approximation
+           - If you cannot calculate the exact moveable feast date for the given regnal year, use the approximate date based on:
+             * Easter typically falls between March 22 and April 25
+             * Pentecost = Easter + 49 days
+             * Ascension = Easter + 40 days (Thursday)
+             * Trinity = Easter + 56 days (Sunday)
+        
         3. When both regnal year and feast are given, combine them to produce a specific ISO date
            - Example: "feast of St. Michael in the 6th year of Henry VI" → "1427-09-29" (if metadata shows Henry VI year 6 = 1427)
+           - Example: "Pentecost in the 2nd year of Henry IV" → Calculate Easter 1400, then add 49 days
+        
         4. If you cannot determine the exact calendar year, use the format "YYYY-MM-DD" with best estimate or note uncertainty
-        5. For moveable feasts (Easter, Pentecost, Ascension, Trinity), if you cannot calculate the exact date:
-           - Either provide the approximate date for that year if calculable
-           - Or use format like "Easter 1427" in the Date field and note it's approximate
+        
+        5. For moveable feasts, if precise calculation is not possible:
+           - Calculate based on the regnal year calendar using approximate Easter dates
+           - Format: "YYYY-MM-DD" (estimated) or use the date range if uncertain
 
         E. PLEADING PHASE (The Arguments) - MANDATORY
         **CRITICAL: TblPleadings is MANDATORY and must contain at least one entry.**
@@ -867,13 +946,19 @@ def build_step4_prompt(
 
         F. POSTEA & PROCESS PHASE (CRITICAL - MANDATORY)
         **CRITICAL: TblPostea is MANDATORY and must contain at least one entry.**
+        **CRITICAL: Document Segmentation - Do NOT miss Postea sections**
         
         **HOW TO FIND POSTEA SECTIONS:**
-        1. Look for keywords: "Afterwards", "Postea", "At which day", "Ad quem diem", "Sheriff", "Precept", "Commanded"
-        2. Postea sections typically appear AFTER the main pleading arguments
-        3. They describe procedural events: summons, adjournments, defaults, judgments
-        4. Each distinct event should be a separate entry
-        5. Even if the text doesn't explicitly say "Postea", extract procedural events as Postea entries
+        1. **Look for keywords**: "Afterwards", "Postea", "At which day", "Ad quem diem", "Et vicecomes" (and the sheriff), "Sheriff", "Precept", "Commanded", "It is considered", "Consideratum est"
+        2. **Visual breaks**: Postea sections typically appear AFTER the main pleading arguments
+           - Look for changes in text format or indentation
+           - Postea often starts on a new line or after a paragraph break
+        3. **Context indicators**: They describe procedural events: summons, adjournments, defaults, judgments
+        4. **CRITICAL**: Read the ENTIRE document from start to finish - do NOT stop at the end of the pleadings
+        5. **CRITICAL**: The document often continues beyond the initial pleading section
+        6. Each distinct event should be a separate entry
+        7. Even if the text doesn't explicitly say "Postea", extract procedural events as Postea entries
+        8. **Check for continuation**: If the text appears to end abruptly, look for additional pages or continuation markers
         
         **COMMON POSTEA PATTERNS:**
         - "At which day came both [parties]" → Extract as: "At which day both parties appeared"
@@ -906,23 +991,48 @@ def build_step4_prompt(
         
         **Case Type (TblCaseType.CaseType) - REQUIRED:**
         **CRITICAL: This field is MANDATORY. You MUST extract at least one case type.**
+        **CRITICAL: Legal Taxonomy Alignment - Distinguish Writ (form of action) from Case Type (specific facts/plea)**
+        
         - Schema location: TblCaseType.CaseType (this is an ARRAY of strings)
-        - Extract ALL case types mentioned in the text
-        - Common types (must match schema enum exactly):
-          * "Debt" - Look for: "plea that he render [money]", "writing obligatory", "bond", "owes"
-          * "Trespass" - Look for: "force and arms", "against the peace", "vi et armis"
-          * "Assault" - Look for: "assault", "beat", "struck", "wounded"
-          * "Housebreaking" - Look for: "broke into", "entered", "housebreaking", "clausum fregit"
-          * "Imprisonment" - Look for: "imprisoned", "detained", "took and imprisoned"
-          * "Account" - Look for: "render reasonable account", "reckoning"
-          * "Detinue" - Look for: "unjustly detains", "detention of goods"
-          * "Covenant" - Look for: "hold to a covenant", "covenant broken"
-          * "Real action  / rents / damage to real estate" - Look for: "land", "tenement", "rent", "real estate"
-          * "Theft" - Look for: "stole", "took", "carried away"
-          * "Trespass (Chattels)" - Look for: "took goods", "carried away chattels"
-        - If multiple types apply, extract ALL of them into the array
-        - If you see "force and arms" combined with "assault" or "housebreaking", extract BOTH "Trespass" and the specific type
-        - Example: If text says "force and arms broke into the house and assaulted", extract: ["Trespass", "Assault", "Housebreaking"]
+        - **MUST analyze the NARRATIO (the facts/plea section) to identify specific sub-categories**
+        - The CaseType represents the SPECIFIC facts of the case, NOT just the writ category
+        - Extract ALL case types mentioned in the text based on the narrative details
+        
+        **CASE TYPE CLASSIFICATION RULES:**
+        
+        **For Trespass writs** - Analyze the narratio to distinguish sub-categories:
+          * "Assault" - Look for: "assault", "beat", "struck", "wounded", "injured", "attacked"
+          * "Housebreaking" - Look for: "broke into", "entered [house/property]", "housebreaking", "clausum fregit", "forcibly entered"
+          * "Trespass" - Generic trespass (use when specific type cannot be determined)
+          * "Imprisonment" - Look for: "imprisoned", "detained", "took and imprisoned", "captured"
+          * "Theft" - Look for: "stole", "took", "carried away [goods]"
+          * "Trespass (Chattels)" - Look for: "took goods", "carried away chattels", "unlawfully took"
+          - **CRITICAL**: If the narratio describes assault, extract "Assault" (NOT just "Trespass")
+          - **CRITICAL**: If the narratio describes housebreaking, extract "Housebreaking" (NOT just "Trespass")
+          - Example: If text says "force and arms broke into the house and assaulted", extract: ["Assault", "Housebreaking"]
+        
+        **For Debt writs** - Analyze the narratio to distinguish sub-categories:
+          * "Loan" - Look for: "lent", "loan", "borrowed", "money lent", "advanced money"
+          * "Bond" - Look for: "bond", "obligation", "writing obligatory", "sealed obligation"
+          * "Debt" - Generic debt (use when specific type cannot be determined)
+          - **CRITICAL**: If the narratio describes a loan transaction, extract "Loan" (NOT just "Debt")
+          - **CRITICAL**: If the narratio describes a bond/obligation, extract "Bond" (or keep as generic "Debt" if bond is already the WritType)
+          - Example: If text says "plea that he render money lent", extract: ["Loan"]
+          - Example: If text says "writing obligatory for 40 marks", extract: ["Bond"]
+        
+        **Other case types** (must match schema enum exactly):
+          * "Account" - Look for: "render reasonable account", "reckoning", "accounting"
+          * "Detinue" - Look for: "unjustly detains", "detention of goods", "detains chattels"
+          * "Covenant" - Look for: "hold to a covenant", "covenant broken", "breach of covenant"
+          * "Real action  / rents / damage to real estate" - Look for: "land", "tenement", "rent", "real estate", "property damage"
+        
+        **EXTRACTION RULES:**
+        - Read the ENTIRE narratio (the Count/plaintiff's claim section) carefully
+        - Identify the SPECIFIC factual allegations, not just the writ category
+        - If multiple specific types apply, extract ALL of them into the array
+        - Do NOT extract the WritType here - extract only the specific CaseType (sub-category)
+        - Example: WritType="Trespass", CaseType=["Assault"] (NOT ["Trespass"])
+        - Example: WritType="Debt", CaseType=["Loan"] (NOT ["Debt"])
         
         **Damages Claimed (TblCase.DamClaimed) - REQUIRED FIELD:**
         **CRITICAL: This field is REQUIRED in the schema. You MUST populate it.**
@@ -936,7 +1046,20 @@ def build_step4_prompt(
           * "100s" (means 100 shillings)
           * "40 marks"
           * "£10"
-        - Extract the EXACT amount mentioned in the original format
+        
+        **CRITICAL: Currency Unit Distinction - Marks vs. Shillings vs. Pounds**
+        - **Shillings (s. or solidus)**: Look for "s." after numbers (e.g., "100s" = 100 shillings)
+        - **Pounds (li. or librae)**: Look for "£", "li.", "lb.", "pounds" (e.g., "£10", "10li.", "10 pounds")
+        - **Marks (m. or marc)**: Look for "m." after numbers or word "marks" (e.g., "40m.", "40 marks")
+        - **CRITICAL**: Do NOT confuse "100s" (100 shillings) with "100m." (100 marks) or "100 marks"
+        - **CRITICAL**: 1 mark = 13s 4d (13 shillings 4 pence), so marks and shillings are DIFFERENT units
+        - **Extraction rules**:
+          * If you see "100s" → Extract as "100s" (100 shillings) - NOT "100 marks"
+          * If you see "100 marks" or "100m." → Extract as "100 marks" - NOT "100s"
+          * Always preserve the original unit (s., m., li., £) in your extraction
+          * When in doubt, look at the Latin text: "solidus" = shillings, "marc" or "marce" = marks, "libra" = pounds
+        
+        - Extract the EXACT amount mentioned in the original format with correct unit
         - Format examples: "100s", "£1000", "40 marks", "100 pounds", "£10 5s 3d"
         - If the text explicitly says "no damages" or "without damages", use empty string ""
         - If you cannot find any mention of damages after thorough search, use empty string ""

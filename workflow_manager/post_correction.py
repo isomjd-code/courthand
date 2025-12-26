@@ -239,6 +239,15 @@ In addition, on each line you will identify any named entities (forenames, surna
    - DO NOT move words between lines
    - **YOU MAY CORRECT NAMED ENTITIES**: If you can clearly see that the HTR misread a name or place name in the image, correct it. For example, if HTR says "Joh'es" but you can see "Joh'is" in the image, correct it. If HTR says "London" but you can see "Lond'on" in the image, correct it.
    - When correcting named entities, preserve the original medieval spelling and abbreviations (e.g., keep "Joh'es" not "Johannes", keep "Lond'on" not "Londonium")
+   
+   - **PALEOGRAPHIC CHARACTER DISAMBIGUATION (CAPITAL LETTERS) - CRITICAL:**
+     The HTR model may confuse similar capital letters in "Court Hand" script. Pay careful attention when correcting:
+     - **C vs. R/G**: Capital C can be misread as R or G (e.g., "Cok" might be misread as "Roke")
+     - **G vs. C**: Capital G can be misread as C (e.g., "Goold" might be misread as "Coolde")
+     - **K vs. H**: Capital K can be misread as H (e.g., "Kelme" might be misread as "Holme")
+     - Use visual evidence from the image to determine the correct letter
+     - Consider context and known names when making corrections
+   
    - **CHARACTER RESTRICTION**: Use ONLY the following characters:
      * Letters: A-Z, a-z
      * Pilcrow for line breaks: ¶
