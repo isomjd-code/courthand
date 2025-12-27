@@ -910,33 +910,38 @@ def build_step4_prompt(
            - For Henry V (1413-1422): Year 1 = 1413 (starting March 21), Year 2 = 1414, etc.
            - For Henry VI (1422-1461): Year 1 = 1422 (starting Sept 1), Year 2 = 1423, etc.
         
+
         2. *Convert Medieval Feast Days to ISO Dates (YYYY-MM-DD)*:
-           - When you encounter feast dates like "feast of St. Michael" or "in festo sancti Michaelis", convert them to ISO format
-           - **Fixed feast dates** (same calendar date every year):
-             * St. Michael (Michaelmas): September 29
-             * St. John the Baptist: June 24
-             * St. Martin: November 11
+           - **Objective**: Convert textual feast dates (e.g., "in festo sancti Michaelis") to standard ISO 8601 format.
+        
+           - **Fixed Feast Dates** (Static calendar dates):
+             * Epiphany: January 6
              * Purification of the Virgin Mary (Candlemas): February 2
              * Annunciation of the Virgin Mary (Lady Day): March 25
+             * Nativity of St. John the Baptist: June 24
+             * St. Michael (Michaelmas): September 29
              * All Saints: November 1
-             * St. Thomas the Apostle: December 21
+             * St. Martin (Martinmas): November 11
+             * St. Thomas the Apostle: December 21 (Note: Medieval date, not modern)
              * Nativity (Christmas): December 25
-             * Epiphany: January 6
-           
-           - **Moveable feasts** (depend on Easter date for that year):
-             * Easter: Variable (calculate based on regnal year calendar)
-             * Pentecost (Whitsun): Variable (7 weeks after Easter = 49 days after)
-             * Ascension: Variable (40 days after Easter)
-             * Trinity Sunday: Variable (first Sunday after Pentecost = 56 days after Easter)
-           
-           - **CRITICAL**: For moveable feasts, you MUST use the correct Easter date for the specific regnal year
-           - **CRITICAL**: Easter dates vary by year - do NOT use a generic approximation
-           - If you cannot calculate the exact moveable feast date for the given regnal year, use the approximate date based on:
-             * Easter typically falls between March 22 and April 25
-             * Pentecost = Easter + 49 days
-             * Ascension = Easter + 40 days (Thursday)
-             * Trinity = Easter + 56 days (Sunday)
         
+           - **Moveable Feasts** (Calculated relative to Easter):
+             * Easter Sunday: Variable (Must be calculated for the specific historical year)
+             * Ascension Day: Variable (Easter + 39 days; always a Thursday)
+             * Pentecost (Whitsun): Variable (Easter + 49 days; always a Sunday)
+             * Trinity Sunday: Variable (Easter + 56 days; always a Sunday)
+        
+           - **CRITICAL: Year Conversion (Old Style vs. New Style)**:
+             * Medieval legal years often started on March 25 (Lady Day), not January 1.
+             * Dates written between **January 1 and March 24** usually belong to the *following* historical year.
+             * *Example*: A document dated "2 Feb 1340" is historically "1341-02-02". 
+             * Output the ISO date using the historical (modern reckoning) year.
+        
+           - **CRITICAL: Calculation Rules**:
+             * For moveable feasts, you MUST identify the specific Easter date for that regnal/historical year.
+             * **Do NOT guess**: If you cannot determine the exact regnal year or calculate the precise moveable feast date, return `null` or `None`.
+             * Never use approximate ranges (e.g., do not assume Easter is always April). Accuracy is required.
+    
         3. When both regnal year and feast are given, combine them to produce a specific ISO date
            - Example: "feast of St. Michael in the 6th year of Henry VI" → "1427-09-29" (if metadata shows Henry VI year 6 = 1427)
            - Example: "Pentecost in the 2nd year of Henry IV" → Calculate Easter 1400, then add 49 days
