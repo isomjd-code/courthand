@@ -72,10 +72,10 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\tcbuselibrary{skins,breakable}",
         r"\usepackage{graphicx}",
         r"\setkeys{Gin}{width=0.75\textwidth,max height=4cm,keepaspectratio}",
-        r"\usepackage{hyperref}",
         r"\usepackage{soul}",
         r"\usepackage{paracol}",
-        r"\hypersetup{colorlinks=true, linkcolor=AccentBlue, urlcolor=AccentBlue, citecolor=AccentBlue}",
+        r"\usepackage{hyperref}",
+        r"\hypersetup{colorlinks=true, linkcolor=AccentBlue, urlcolor=AccentBlue, citecolor=AccentBlue, pdfstartview=FitH}",
         r"\definecolor{MatchColor}{RGB}{34, 139, 34}",
         r"\definecolor{GTColor}{RGB}{178, 34, 34}",
         r"\definecolor{AIColor}{RGB}{0, 71, 171}",
@@ -642,7 +642,7 @@ def generate_executive_summary(
     sim_color = get_accuracy_color(avg_sim)
 
     latex = [
-        r"\section{Executive Summary}",
+        r"\section{Executive Summary}\label{sec:executive-summary}",
         r"\begin{summarybox}[Validation Overview]",
         r"\begin{center}\begin{tabular}{cccc}",
         f"\\begin{{metricbox}}[Total Fields] \\Huge {summary['total_fields']} \\end{{metricbox}} &",
@@ -2156,7 +2156,7 @@ def generate_case_comparison_section(
     logger.info("[Report Generation]   - Party matching (1 call per GT x AI agent pair)")
     case_id = clean_text_for_xelatex(gt_case.get("TblCase", {}).get("CaseRot", "Unknown Rotulus"))
     latex = [
-        r"\section{Case Record Comparison}",
+        r"\section{Case Record Comparison}\label{sec:case-comparison}",
         f"\\subsection*{{Court of Common Pleas, CP40-565 {case_id}}}",
         r"\begin{tcolorbox}[colback=white, colframe=gray!75, breakable, sharp corners]",
     ]
@@ -2194,7 +2194,7 @@ def generate_transcription_section(
     output_dir: Optional[str] = None
 ) -> List[str]:
     """Generate the diplomatic transcription section with confidence-based color coding."""
-    latex = [r"\newpage", r"\section{Diplomatic Transcription}"]
+    latex = [r"\newpage", r"\section{Diplomatic Transcription}\label{sec:transcription}"]
     if not source_material:
         latex.append(r"\textit{No source material available.}")
         return latex
@@ -2328,7 +2328,7 @@ def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
     
     latex = [
         r"\newpage",
-        r"\section{Full Text Reconstructions}",
+        r"\section{Full Text Reconstructions}\label{sec:full-text}",
     ]
     
     # Show texts in separate subsections to avoid alignment issues and empty pages
@@ -2445,13 +2445,13 @@ def generate_cost_breakdown_section(master_data: Dict[str, Any]) -> List[str]:
         logger.warning(f"[Cost Breakdown] Missing data - token_usage keys: {list(token_usage.keys()) if token_usage else 'None'}, estimated_cost keys: {list(estimated_cost.keys()) if estimated_cost else 'None'}")
         return [
             r"\newpage",
-            r"\section{Processing Cost Breakdown}",
+            r"\section{Processing Cost Breakdown}\label{sec:cost-breakdown}",
             r"\textit{No cost information available.}",
         ]
     
     latex = [
         r"\newpage",
-        r"\section{Processing Cost Breakdown}",
+        r"\section{Processing Cost Breakdown}\label{sec:cost-breakdown}",
         r"\begin{summarybox}[Cost Overview]",
         r"\textbf{Model:} Gemini 3 Flash Preview",
         r"\begin{itemize}",

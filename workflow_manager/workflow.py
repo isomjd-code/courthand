@@ -2546,6 +2546,27 @@ class WorkflowManager:
                     if not success2:
                         logger.error(f"[{gid}] xelatex Pass 2 failed for {tex_filename}. Stderr: {stderr2}")
                         continue  # Try next file instead of returning False
+                    
+                    # Pass 3 (For TOC and all cross-references to be fully resolved)
+                    logger.info(f"[{gid}] Running: Compile PDF (Pass 3) for {tex_filename}")
+                    success3, stdout3, stderr3 = self._run_subprocess_robust(
+                        cmd_xelatex_args,
+                        cwd=out_dir,
+                        timeout=120,
+                        description=f"[{gid}] Compile PDF (Pass 3) for {tex_filename}"
+                    )
+                    
+                    # Log xelatex output for debugging
+                    if stdout3:
+                        if "Error" in stdout3 or "Fatal" in stdout3 or "!" in stdout3:
+                            logger.warning(f"[{gid}] xelatex Pass 3 had errors/warnings for {tex_filename}:\n{stdout3[-2000:]}")
+                        else:
+                            logger.debug(f"[{gid}] xelatex Pass 3 output for {tex_filename} (last 500 chars):\n{stdout3[-500:]}")
+                    if stderr3:
+                        logger.warning(f"[{gid}] xelatex Pass 3 stderr for {tex_filename}:\n{stderr3}")
+                    
+                    if not success3:
+                        logger.warning(f"[{gid}] xelatex Pass 3 failed for {tex_filename}, but continuing anyway. Stderr: {stderr3}")
 
                     # Check if PDF was actually created
                     pdf_file_path = os.path.splitext(tex_file_path)[0] + ".pdf"

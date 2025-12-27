@@ -183,8 +183,11 @@ def compile_pdf(tex_path):
             time.sleep(5)
             return None
         
-        # Run xelatex (may need to run twice for references)
-        for i in range(2):
+        # Run xelatex (may need to run multiple times for TOC and references)
+        # First pass: collect TOC entries
+        # Second pass: generate TOC with page numbers
+        # Third pass: resolve all cross-references
+        for i in range(3):
             try:
                 result = subprocess.run(
                     ['xelatex', '-interaction=nonstopmode', tex_file],
