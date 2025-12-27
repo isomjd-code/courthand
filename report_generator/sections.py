@@ -1889,7 +1889,7 @@ def _generate_individuals_table(
 
     latex = [
         r"\subsubsection*{Individuals}",
-        r"\begin{longtable}{|p{0.20\textwidth}|p{0.12\textwidth}|p{0.12\textwidth}|p{0.20\textwidth}|p{0.30\textwidth}|}",
+        r"\begin{longtable}{|p{0.18\textwidth}|p{0.11\textwidth}|p{0.11\textwidth}|p{0.18\textwidth}|p{0.28\textwidth}|}",
         r"\hline \textbf{Individual} & \textbf{Status} & \textbf{Occupation} & \textbf{Role} & \textbf{Location} \\ \hline \endhead",
     ]
 
