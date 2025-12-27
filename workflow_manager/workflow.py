@@ -671,22 +671,39 @@ class WorkflowManager:
         except: return []
 
         # Map ID to Geometry
+        # Import BBOX_LEFT_EXTENSION to extend bounding boxes to the left
+        # This ensures bounding boxes passed to LLM reflect the expanded width used by PyLaia
+        try:
+            from line_preprocessor_greyscale.config import BBOX_LEFT_EXTENSION
+        except ImportError:
+            try:
+                from line_preprocessor.config import BBOX_LEFT_EXTENSION
+            except ImportError:
+                # Fallback if config is not available
+                BBOX_LEFT_EXTENSION = 200
+        
         geo_map = {}
         for l in layout_lines:
             boundary = l.get('boundary') # This is the polygon [[x,y], [x,y]]
             bbox = None
+            extended_polygon = boundary
+            
             if boundary and isinstance(boundary, list) and len(boundary) > 0:
                 try:
-                    xs = [pt[0] for pt in boundary]
-                    ys = [pt[1] for pt in boundary]
-                    # Store as [ymin, xmin, ymax, xmax]
+                    # Extend polygon to the left by BBOX_LEFT_EXTENSION pixels
+                    # This ensures bounding boxes match the expanded width used by PyLaia
+                    extended_polygon = [[max(0, pt[0] - BBOX_LEFT_EXTENSION), pt[1]] for pt in boundary]
+                    
+                    xs = [pt[0] for pt in extended_polygon]
+                    ys = [pt[1] for pt in extended_polygon]
+                    # Store as [ymin, xmin, ymax, xmax] with extended coordinates
                     bbox = [int(min(ys)), int(min(xs)), int(max(ys)), int(max(xs))]
                 except Exception:
                     pass
             
             geo_map[l['id']] = {
                 "bbox": bbox,
-                "polygon": boundary
+                "polygon": extended_polygon  # Store extended polygon for consistency
             }
 
         structured = []
@@ -781,8 +798,8 @@ class WorkflowManager:
                             "line_id": file_id,
                             "htr_text": text,
                             "word_confidences": word_confidences,
-                            "bbox": geo_info['bbox'],
-                            "polygon": geo_info['polygon'] # Persist the raw polygon
+                            "bbox": geo_info['bbox'],  # Extended bounding box reflecting expanded width
+                            "polygon": geo_info['polygon']  # Extended polygon matching PyLaia processing
                         })
 
         # Sort by vertical position (ymin)

@@ -65,7 +65,11 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\usepackage{tcolorbox}",
         r"\tcbuselibrary{skins,breakable}",
         r"\usepackage{graphicx}",
+        r"\setkeys{Gin}{width=0.75\textwidth,max height=4cm,keepaspectratio}",
         r"\usepackage{hyperref}",
+        r"\usepackage{soul}",
+        r"\usepackage{paracol}",
+        r"\hypersetup{colorlinks=true, linkcolor=AccentBlue, urlcolor=AccentBlue, citecolor=AccentBlue}",
         r"\definecolor{MatchColor}{RGB}{34, 139, 34}",
         r"\definecolor{GTColor}{RGB}{178, 34, 34}",
         r"\definecolor{AIColor}{RGB}{0, 71, 171}",
@@ -75,6 +79,10 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\definecolor{HeaderBg}{RGB}{47, 79, 79}",
         r"\definecolor{HeaderFg}{RGB}{255, 255, 255}",
         r"\definecolor{AccentBlue}{RGB}{70, 130, 180}",
+        r"\definecolor{DiffRed}{RGB}{255, 200, 200}",
+        r"\definecolor{DiffGreen}{RGB}{200, 255, 200}",
+        r"\definecolor{LowConfYellow}{RGB}{255, 255, 200}",
+        r"\definecolor{LowConfRed}{RGB}{255, 200, 200}",
         r"\newtcolorbox{summarybox}[1][]{enhanced, breakable, colback=blue!5!white, colframe=AccentBlue, fonttitle=\bfseries\sffamily, title={#1}, boxrule=1pt, arc=3mm}",
         r"\newtcolorbox{metricbox}[1][]{enhanced, colback=gray!5!white, colframe=gray!50!black, fonttitle=\bfseries\sffamily\small, title={#1}, boxrule=0.5pt, arc=2mm, width=0.22\textwidth, halign=center}",
         r"\newtcolorbox{textbox}[1][]{enhanced, breakable, colback=gray!8!white, colframe=gray!60!black, fonttitle=\bfseries\sffamily\small, title={#1}, boxrule=0.5pt, arc=2mm, left=3mm, right=3mm, top=2mm, bottom=2mm}",
@@ -96,6 +104,8 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\newcommand{\mismatchicon}{\textcolor{GTColor}{\textbf{-}}}",
         r"\newcommand{\partialicon}{\textcolor{PartialColor}{\textbf{?}}}",
         r"\newcommand{\progressbar}[2]{\begin{tikzpicture}[baseline=-0.5ex]\fill[gray!20] (0,0) rectangle (3cm,0.3cm);\fill[#1] (0,0) rectangle (#2*3cm,0.3cm);\end{tikzpicture}}",
+        r"\newcommand{\diffgt}[1]{\textcolor{GTColor}{\sout{#1}}}",
+        r"\newcommand{\diffai}[1]{\textcolor{MatchColor}{#1}}",
         r"\title{\sffamily\bfseries\Huge AI Extraction Validation Report}",
         f"\\author{{\\sffamily Case Reference: {case_id}}}",
         r"\date{\sffamily\today}",
@@ -559,11 +569,12 @@ def _extract_and_process_line_image(
         
         baseline_str = " ".join(f"{int(p[0])},{int(p[1])}" for p in baseline_points)
         
+        # Use wider padding to include 1-2 words on either side for better context
         initial_result = initial_line_extraction(
             page_image,
             polygon_tuples,
             baseline_str,
-            padding=10,
+            padding=50,  # Increased from 10 to 50 pixels to show surrounding context
         )
         
         if not initial_result:
@@ -633,6 +644,7 @@ def generate_executive_summary(
         f"\\begin{{metricbox}}[Accuracy] \\Huge\\textcolor{{{acc_color}}}{{{overall_acc:.1f}}}\\% \\end{{metricbox}} &",
         f"\\begin{{metricbox}}[Avg Similarity] \\Huge\\textcolor{{{sim_color}}}{{{avg_sim:.1f}}}\\% \\end{{metricbox}}",
         r"\end{tabular}\end{center}",
+        r"\textit{See \hyperref[sec:field-comparison]{Detailed Field Comparison} section for field-by-field analysis.}",
         r"\end{summarybox}",
         r"\subsection{Accuracy by Category}",
         r"\begin{center}\begin{tabular}{lcccc}\toprule",
@@ -663,11 +675,26 @@ def generate_executive_summary(
         low_confidence_names = _find_low_confidence_names(source_material, output_dir)
         
         if low_confidence_names:
-            latex.append(r"\subsection{Names to Check}")
+            latex.append(r"\subsection{Names to Check}\label{sec:names-to-check}")
             latex.append(
-                r"This section lists forenames, surnames, and place names with Bayesian probability < 90\%. "
+                r"This section lists forenames, surnames, and place names with Bayesian probability less than 90\%. "
+                r"Recurring entities are grouped together to reduce report length. "
                 r"Each entry shows the Bayesian probability, the selected name, and the top 3 alternatives with their probabilities. "
                 r"Each entry includes the HTR image lines where the name appears for visual verification."
+            )
+            
+            # Group names by (name, type) to show recurring entities once
+            from collections import defaultdict
+            name_groups = defaultdict(list)
+            for name_info in low_confidence_names:
+                key = (name_info["name"], name_info["type"])
+                name_groups[key].append(name_info)
+            
+            # Sort by number of occurrences (most frequent first), then by probability (lowest first)
+            grouped_names = sorted(
+                name_groups.items(),
+                key=lambda x: (len(x[1]), -min(ni.get("probability", 1.0) for ni in x[1])),
+                reverse=True
             )
             
             # Create directory for line images (in same directory as LaTeX output)
@@ -681,11 +708,11 @@ def generate_executive_summary(
                     logger.warning(f"[Names to Check] Could not create line_images directory: {e}")
                     line_images_dir = None
             
-            total_names = len(low_confidence_names)
-            logger.info(f"[Names to Check] Processing {total_names} low-confidence names...")
-            for idx, name_info in enumerate(low_confidence_names, 1):
-                name = name_info["name"]
-                name_type = name_info["type"]
+            total_names = len(grouped_names)
+            logger.info(f"[Names to Check] Processing {total_names} grouped low-confidence names...")
+            for idx, ((name, name_type), name_occurrences) in enumerate(grouped_names, 1):
+                # Use the first occurrence's data as representative (they should all be similar)
+                name_info = name_occurrences[0]
                 probability = name_info.get("probability", 0.0)
                 original = name_info.get("original", "")
                 top_alternatives = name_info.get("top_alternatives", [])
@@ -704,42 +731,27 @@ def generate_executive_summary(
                 }
                 type_label = type_label_map.get(name_type, name_type.title())
                 
-                # Build header with probability
+                # Build header with probability and occurrence count
+                occurrence_count = len(name_occurrences)
                 header = f"{clean_text_for_xelatex(name)} ({type_label})"
                 header += f" \\textcolor{{{prob_color}}}{{\\textbf{{[{prob_pct:.1f}\\%]}}}}"
+                if occurrence_count > 1:
+                    header += f" \\textit{{(Recurring: {occurrence_count} occurrences)}}"
                 latex.append(f"\\subsubsection*{{{header}}}")
                 
                 # Show original if different from selected name
                 if original and original != name:
                     latex.append(f"\\textit{{Original extraction: {clean_text_for_xelatex(original)}}}\\\\")
                 
-                # Show Bayesian breakdown for selected name
+                # Show simplified Bayesian breakdown for selected name (only percentage, no raw logs)
                 best_candidate = name_info.get("best_candidate", {})
-                log_prior = best_candidate.get("log_prior")
-                normalized_log_likelihood = best_candidate.get("normalized_log_likelihood")
                 frequency = best_candidate.get("frequency")
                 
-                if log_prior is not None or normalized_log_likelihood is not None:
-                    latex.append(r"\textbf{Bayesian Breakdown (Selected Name):}")
+                # Only show frequency if available, skip raw log values
+                if frequency is not None:
+                    latex.append(r"\textbf{Database Context:}")
                     latex.append(r"\begin{itemize}")
-                    if log_prior is not None:
-                        # Convert log prior back to probability for display (with safety check)
-                        try:
-                            prior_prob = math.exp(log_prior) if log_prior > -50 else 0.0
-                            latex.append(f"\\item \\textit{{Prior (database frequency)}}: {prior_prob:.6f} (log: {log_prior:.3f})")
-                        except (OverflowError, ValueError):
-                            latex.append(f"\\item \\textit{{Prior (database frequency)}}: log: {log_prior:.3f} (too small to display)")
-                        if frequency is not None:
-                            latex.append(f"  \\begin{{itemize}}")
-                            latex.append(f"  \\item Database frequency: {frequency}")
-                            latex.append(f"  \\end{{itemize}}")
-                    if normalized_log_likelihood is not None:
-                        # Convert log likelihood back to probability for display (with safety check)
-                        try:
-                            likelihood_prob = math.exp(normalized_log_likelihood) if normalized_log_likelihood > -50 else 0.0
-                            latex.append(f"\\item \\textit{{Likelihood (given image)}}: {likelihood_prob:.6f} (log: {normalized_log_likelihood:.3f})")
-                        except (OverflowError, ValueError):
-                            latex.append(f"\\item \\textit{{Likelihood (given image)}}: log: {normalized_log_likelihood:.3f} (too small to display)")
+                    latex.append(f"\\item Database frequency: {frequency} occurrences")
                     latex.append(r"\end{itemize}")
                     latex.append("")
                 
@@ -755,50 +767,56 @@ def generate_executive_summary(
                         alt_frequency = alt.get("frequency")
                         
                         latex.append(f"\\item \\textbf{{{alt_idx}. {clean_text_for_xelatex(alt_name)}}}: {alt_prob:.1f}\\% probability")
-                        if alt_log_prior is not None or alt_normalized_log_likelihood is not None:
+                        # Only show frequency if available, skip raw log values
+                        if alt_frequency is not None:
                             latex.append(f"  \\begin{{itemize}}")
-                            if alt_log_prior is not None:
-                                try:
-                                    alt_prior_prob = math.exp(alt_log_prior) if alt_log_prior > -50 else 0.0
-                                    latex.append(f"  \\item Prior: {alt_prior_prob:.6f} (log: {alt_log_prior:.3f})")
-                                except (OverflowError, ValueError):
-                                    latex.append(f"  \\item Prior: log: {alt_log_prior:.3f} (too small to display)")
-                                if alt_frequency is not None:
-                                    latex.append(f"    \\begin{{itemize}}")
-                                    latex.append(f"    \\item Database frequency: {alt_frequency}")
-                                    latex.append(f"    \\end{{itemize}}")
-                            if alt_normalized_log_likelihood is not None:
-                                try:
-                                    alt_likelihood_prob = math.exp(alt_normalized_log_likelihood) if alt_normalized_log_likelihood > -50 else 0.0
-                                    latex.append(f"  \\item Likelihood: {alt_likelihood_prob:.6f} (log: {alt_normalized_log_likelihood:.3f})")
-                                except (OverflowError, ValueError):
-                                    latex.append(f"  \\item Likelihood: log: {alt_normalized_log_likelihood:.3f} (too small to display)")
+                            latex.append(f"  \\item Database frequency: {alt_frequency} occurrences")
                             latex.append(f"  \\end{{itemize}}")
                     latex.append(r"\end{itemize}")
                     latex.append("")
                 
-                # Find matching lines
-                matching_lines = _find_lines_containing_name(name, source_material)
-                if original and original != name:
-                    # Also search for original
-                    original_lines = _find_lines_containing_name(original, source_material)
-                    # Merge and deduplicate
-                    seen_line_ids = set()
-                    merged_lines = []
-                    for line in matching_lines + original_lines:
-                        line_id = line.get("line_id")
-                        if line_id and line_id not in seen_line_ids:
-                            seen_line_ids.add(line_id)
-                            merged_lines.append(line)
-                    matching_lines = merged_lines
+                # Find matching lines for all occurrences of this name
+                all_matching_lines = []
+                for name_occ in name_occurrences:
+                    occ_name = name_occ["name"]
+                    occ_original = name_occ.get("original", "")
+                    matching_lines = _find_lines_containing_name(occ_name, source_material)
+                    if occ_original and occ_original != occ_name:
+                        # Also search for original
+                        original_lines = _find_lines_containing_name(occ_original, source_material)
+                        # Merge and deduplicate
+                        seen_line_ids = set()
+                        merged_lines = []
+                        for line in matching_lines + original_lines:
+                            line_id = line.get("line_id")
+                            if line_id and line_id not in seen_line_ids:
+                                seen_line_ids.add(line_id)
+                                merged_lines.append(line)
+                        matching_lines = merged_lines
+                    all_matching_lines.extend(matching_lines)
                 
-                logger.info(f"[Names to Check] Found {len(matching_lines)} lines containing '{name}'")
+                # Deduplicate by line_id
+                seen_line_ids = set()
+                unique_matching_lines = []
+                for line in all_matching_lines:
+                    line_id = line.get("line_id")
+                    if line_id and line_id not in seen_line_ids:
+                        seen_line_ids.add(line_id)
+                        unique_matching_lines.append(line)
                 
-                if matching_lines:
-                    latex.append(r"\textbf{Occurrences in source material:}")
+                logger.info(f"[Names to Check] Found {len(unique_matching_lines)} unique lines containing '{name}' (across {occurrence_count} occurrences)")
+                
+                if unique_matching_lines:
+                    # Show line references
+                    line_refs = sorted([line.get("line_id", "") for line in unique_matching_lines if line.get("line_id")])
+                    if line_refs:
+                        latex.append(f"\\textbf{{Line References:}} {', '.join(line_refs[:20])}" + ("..." if len(line_refs) > 20 else ""))
+                        latex.append("")
+                    
+                    latex.append(r"\textbf{Representative Occurrences (showing up to 3 images):}")
                     latex.append(r"\begin{itemize}")
                     
-                    for line_idx, line_info in enumerate(matching_lines[:5], 1):  # Limit to 5 lines per name
+                    for line_idx, line_info in enumerate(unique_matching_lines[:3], 1):  # Limit to 3 images per grouped name
                         filename = line_info["filename"]
                         line_id = line_info["line_id"]
                         htr_text = line_info.get("htr_text", "")
@@ -815,14 +833,15 @@ def generate_executive_summary(
                         max_images_per_name = 3  # Limit to 3 images per name to speed up processing
                         
                         # Initialize output_image_path early so we can use it for extraction attempts
-                        if line_images_dir and line_idx <= max_images_per_name:
+                        max_images_per_grouped_name = 3  # Limit to 3 images for grouped names
+                        if line_images_dir and line_idx <= max_images_per_grouped_name:
                             # Create safe filename for image
                             safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in name)[:20]
                             image_filename = f"line_{line_id.replace('L', '')}_{safe_name}.jpg"
                             output_image_path = os.path.join(line_images_dir, image_filename)
                         
                         # First, check if image already exists (even if skip_image_processing is True)
-                        if line_images_dir and line_idx <= max_images_per_name and output_image_path:
+                        if line_images_dir and line_idx <= max_images_per_grouped_name and output_image_path:
                             # Check if image already exists
                             if os.path.exists(output_image_path):
                                 image_extracted = True
@@ -920,40 +939,53 @@ def generate_executive_summary(
                             if not os.path.exists(real_path) and real_path.endswith('.png'):
                                 real_path = real_path.replace('.png', '.jpg')
                                 
-                            if os.path.exists(real_path):
-                                # Use relative path for LaTeX (relative to output_dir where LaTeX compiles)
-                                if output_dir:
-                                    # Normalize paths to absolute before computing relative path
-                                    abs_real_path = os.path.abspath(real_path)
-                                    abs_output_dir = os.path.abspath(output_dir)
-                                    rel_image_path = os.path.relpath(abs_real_path, abs_output_dir).replace("\\", "/")
-                                    logger.debug(f"[Names to Check] Image path: real_path={real_path}, output_dir={output_dir}, rel_path={rel_image_path}")
-                                else:
-                                    # Fallback to absolute path if output_dir not available
-                                    rel_image_path = os.path.abspath(real_path).replace("\\", "/")
-                                    logger.warning(f"[Names to Check] output_dir not available, using absolute path: {rel_image_path}")
-                                
-                                latex.append(
-                                    f"\\item \\textbf{{{clean_text_for_xelatex(line_id)}}} "
-                                    f"(from {clean_text_for_xelatex(filename)}): "
-                                    f"\\textit{{{clean_text_for_xelatex(display_text)}}}"
-                                )
-                                latex.append(r"\par")
-                                latex.append(r"\vspace{0.3cm}")
-                                latex.append(r"\noindent")
-                                latex.append(r"\begin{center}")
-                                
-                                # --- LaTeX code for the image ---
-                                # Note: Path is not cleaned with clean_text_for_xelatex because file paths
-                                # in \includegraphics should be literal, not escaped
-                                latex.append(f"\\includegraphics[width=0.9\\textwidth,keepaspectratio]{{{rel_image_path}}}")
-                                
-                                latex.append(r"\end{center}")
-                                latex.append(r"\vspace{0.4cm}")
-                                image_included = True
-                                logger.info(f"[Names to Check] Added image to LaTeX: {rel_image_path} (exists: {os.path.exists(real_path)})")
+                            # Double-check file exists and is readable before including
+                            if os.path.exists(real_path) and os.path.getsize(real_path) > 0:
+                                try:
+                                    # Try to verify it's a valid image file
+                                    test_img = Image.open(real_path)
+                                    test_img.verify()
+                                    test_img.close()
+                                    
+                                    # Use relative path for LaTeX (relative to output_dir where LaTeX compiles)
+                                    if output_dir:
+                                        # Normalize paths to absolute before computing relative path
+                                        abs_real_path = os.path.abspath(real_path)
+                                        abs_output_dir = os.path.abspath(output_dir)
+                                        rel_image_path = os.path.relpath(abs_real_path, abs_output_dir).replace("\\", "/")
+                                        logger.debug(f"[Names to Check] Image path: real_path={real_path}, output_dir={output_dir}, rel_path={rel_image_path}")
+                                    else:
+                                        # Fallback to absolute path if output_dir not available
+                                        rel_image_path = os.path.abspath(real_path).replace("\\", "/")
+                                        logger.warning(f"[Names to Check] output_dir not available, using absolute path: {rel_image_path}")
+                                    
+                                    latex.append(
+                                        f"\\item \\textbf{{{clean_text_for_xelatex(line_id)}}} "
+                                        f"(from {clean_text_for_xelatex(filename)}): "
+                                        f"\\textit{{{clean_text_for_xelatex(display_text)}}}"
+                                    )
+                                    latex.append(r"\par")
+                                    latex.append(r"\vspace{0.2cm}")
+                                    latex.append(r"\noindent")
+                                    latex.append(r"\begin{center}")
+                                    
+                                    # --- LaTeX code for the image ---
+                                    # Use constrained size to prevent huge images and blank pages
+                                    # Note: Path is not cleaned with clean_text_for_xelatex because file paths
+                                    # in \includegraphics should be literal, not escaped
+                                    # Use width constraint with max dimension to prevent blank pages from oversized images
+                                    latex.append(f"\\includegraphics[width=0.75\\textwidth,max height=4cm,keepaspectratio]{{{rel_image_path}}}")
+                                    
+                                    latex.append(r"\end{center}")
+                                    latex.append(r"\vspace{0.2cm}")
+                                    image_included = True
+                                    logger.info(f"[Names to Check] Added image to LaTeX: {rel_image_path} (exists: {os.path.exists(real_path)})")
+                                except Exception as e:
+                                    logger.warning(f"[Names to Check] Error validating image {real_path}: {e}, skipping image inclusion")
+                                    image_included = False
                             else:
-                                logger.warning(f"[Names to Check] Image file does not exist at expected path: {real_path}")
+                                logger.warning(f"[Names to Check] Image file does not exist or is empty at expected path: {real_path}")
+                                image_included = False
                         
                         if not image_included:
                             latex.append(
@@ -966,7 +998,7 @@ def generate_executive_summary(
                     latex.append("")  # Add spacing
         else:
             latex.append(r"\subsection{Names to Check}")
-            latex.append(r"\textit{No names with Bayesian probability < 90\% found.}")
+            latex.append(r"\textit{No names with Bayesian probability less than 90\% found.}")
     
     return latex
 
@@ -2021,12 +2053,107 @@ def generate_case_comparison_section(
     return latex
 
 
-def generate_transcription_section(source_material: List[Dict]) -> List[str]:
-    """Generate the diplomatic transcription section."""
+def generate_transcription_section(
+    source_material: List[Dict],
+    extracted_entities: Optional[Dict[str, Any]] = None,
+    output_dir: Optional[str] = None
+) -> List[str]:
+    """Generate the diplomatic transcription section with confidence-based color coding."""
     latex = [r"\newpage", r"\section{Diplomatic Transcription}"]
     if not source_material:
         latex.append(r"\textit{No source material available.}")
         return latex
+    
+    # Build a map of low-confidence names for highlighting
+    low_confidence_map = {}  # word -> confidence
+    if extracted_entities:
+        for name_type in ["surnames", "place_names"]:
+            entities = extracted_entities.get(name_type, [])
+            for entity in entities:
+                term = entity.get("term", "").lower().strip()
+                probability = entity.get("probability")
+                # Handle None case - default to 1.0 (high confidence) if not available
+                if probability is None:
+                    probability = 1.0
+                if probability < 0.9:  # < 90% confidence
+                    low_confidence_map[term] = probability
+                    # Also check anglicized form for place names
+                    if name_type == "place_names":
+                        anglicized = entity.get("anglicized", "").lower().strip()
+                        if anglicized:
+                            low_confidence_map[anglicized] = probability
+    
+    # Also check post_correction.json files for forenames and surnames
+    if output_dir:
+        for source in source_material:
+            filename = source.get("filename", "")
+            if not filename:
+                continue
+            post_correction_path = os.path.join(output_dir, f"{filename}_post_correction.json")
+            if os.path.exists(post_correction_path):
+                try:
+                    with open(post_correction_path, "r", encoding="utf-8") as f:
+                        post_correction_data = json.load(f)
+                    if isinstance(post_correction_data, str):
+                        post_correction_data = json.loads(post_correction_data)
+                    if isinstance(post_correction_data, dict):
+                        lines = post_correction_data.get("lines", [])
+                        for line in lines:
+                            for fn in line.get("forenames", []):
+                                best_candidate = fn.get("best_candidate")
+                                if best_candidate:
+                                    prob = best_candidate.get("probability")
+                                    # Handle None case - default to 1.0 (high confidence) if not available
+                                    if prob is None:
+                                        prob = 1.0
+                                    if prob < 0.9:
+                                        name = best_candidate.get("text", "").lower().strip()
+                                        if name:
+                                            low_confidence_map[name] = prob
+                            for sn in line.get("surnames", []):
+                                best_candidate = sn.get("best_candidate")
+                                if best_candidate:
+                                    prob = best_candidate.get("probability")
+                                    # Handle None case - default to 1.0 (high confidence) if not available
+                                    if prob is None:
+                                        prob = 1.0
+                                    if prob < 0.9:
+                                        name = best_candidate.get("text", "").lower().strip()
+                                        if name:
+                                            low_confidence_map[name] = prob
+                except Exception as e:
+                    logger.debug(f"[Transcription] Error reading post_correction.json for {filename}: {e}")
+
+    def highlight_low_confidence_words(text: str) -> str:
+        """Highlight low-confidence words in the text."""
+        words = text.split()
+        highlighted_words = []
+        for word in words:
+            # Remove punctuation for matching
+            word_clean = word.lower().strip(".,;:!?()[]{}")
+            confidence = low_confidence_map.get(word_clean)
+            if confidence is not None:
+                if confidence < 0.5:
+                    # Red highlight for < 50%
+                    highlighted_words.append(f"\\textcolor{{LowConfRed}}{{\\textbf{{{clean_text_for_xelatex(word)}}}}}")
+                elif confidence < 0.9:
+                    # Yellow highlight for 50-90%
+                    highlighted_words.append(f"\\textcolor{{LowConfYellow!70!black}}{{\\textbf{{{clean_text_for_xelatex(word)}}}}}")
+                else:
+                    highlighted_words.append(clean_text_for_xelatex(word))
+            else:
+                highlighted_words.append(clean_text_for_xelatex(word))
+        return " ".join(highlighted_words)
+
+    latex.append(r"\begin{tcolorbox}[colback=blue!5!white, colframe=AccentBlue, title=Confidence Legend, breakable]")
+    latex.append(r"\textbf{Color Coding:}")
+    latex.append(r"\begin{itemize}")
+    latex.append(r"\item \textcolor{LowConfRed}{\textbf{Red}}: Confidence < 50\%")
+    latex.append(r"\item \textcolor{LowConfYellow!70!black}{\textbf{Yellow}}: Confidence 50-90\%")
+    latex.append(r"\item \textbf{Black}: Confidence \textgreater{} 90\%")
+    latex.append(r"\end{itemize}")
+    latex.append(r"\end{tcolorbox}")
+    latex.append(r"\vspace{0.3cm}")
 
     for source in source_material:
         filename = clean_text_for_xelatex(source.get("filename", "Unknown"))
@@ -2036,18 +2163,21 @@ def generate_transcription_section(source_material: List[Dict]) -> List[str]:
             latex.append(r"\begin{description}[style=nextline, leftmargin=1.5cm, labelwidth=1.2cm]")
             for line in lines:
                 line_id = clean_text_for_xelatex(line.get("line_id", ""))
-                text = clean_text_for_xelatex(line.get("text_diplomatic", ""))
-                latex.append(f"\\item[{line_id}] {text}")
+                text = line.get("text_diplomatic", "")
+                highlighted_text = highlight_low_confidence_words(text)
+                latex.append(f"\\item[{line_id}] {highlighted_text}")
             latex.append(r"\end{description}")
         else:
             latex.append(r"\textit{No lines transcribed.}")
         latex.append(r"\end{textbox}\vspace{0.3cm}")
-        latex.append(r"\newpage")
+        # Only add newpage if there are more sources to avoid trailing blank pages
+        if source != source_material[-1]:
+            latex.append(r"\newpage")
     return latex
 
 
 def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
-    """Generate the full text reconstructions section."""
+    """Generate the full text reconstructions section with aligned three-column layout."""
     text_content = master_data.get("text_content", {})
     consensus_diplomatic = (
         " ".join(
@@ -2057,32 +2187,51 @@ def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
         )
         or "N/A"
     )
-
-    return [
+    
+    latin_text = text_content.get("latin_reconstructed", "N/A")
+    english_text = text_content.get("english_translation", "N/A")
+    
+    latex = [
         r"\newpage",
         r"\section{Full Text Reconstructions}",
-        r"\subsection*{Consensus Diplomatic}",
-        r"\begin{textbox}[Consensus Diplomatic Transcription]",
-        clean_text_for_xelatex(consensus_diplomatic),
-        r"\end{textbox}",
-        r"\newpage",
-        r"\subsection*{Expanded Latin}",
-        r"\begin{textbox}[Reconstructed Latin Text]",
-        clean_text_for_xelatex(text_content.get("latin_reconstructed", "N/A")),
-        r"\end{textbox}",
-        r"\newpage",
-        r"\subsection*{English Translation}",
-        r"\begin{textbox}[English Translation]",
-        clean_text_for_xelatex(text_content.get("english_translation", "N/A")),
-        r"\end{textbox}",
     ]
+    
+    # Show texts in separate subsections to avoid alignment issues and empty pages
+    # This is clearer and avoids the problem of mismatched paragraph counts
+    latex.append(r"\subsection*{Diplomatic Transcription}")
+    latex.append(r"\begin{textbox}[Consensus Diplomatic Transcription]")
+    if consensus_diplomatic and consensus_diplomatic != "N/A":
+        latex.append(clean_text_for_xelatex(consensus_diplomatic))
+    else:
+        latex.append("N/A")
+    latex.append(r"\end{textbox}")
+    latex.append(r"\vspace{0.5cm}")
+    
+    latex.append(r"\subsection*{Expanded Latin}")
+    latex.append(r"\begin{textbox}[Reconstructed Latin Text]")
+    if latin_text and latin_text != "N/A":
+        latex.append(clean_text_for_xelatex(latin_text))
+    else:
+        latex.append("N/A")
+    latex.append(r"\end{textbox}")
+    latex.append(r"\vspace{0.5cm}")
+    
+    latex.append(r"\subsection*{English Translation}")
+    latex.append(r"\begin{textbox}[English Translation]")
+    if english_text and english_text != "N/A":
+        latex.append(clean_text_for_xelatex(english_text))
+    else:
+        latex.append("N/A")
+    latex.append(r"\end{textbox}")
+    
+    return latex
 
 
 def generate_field_level_report(metrics: ValidationMetrics) -> List[str]:
     """Generate detailed field-level comparison report."""
     latex = [
         r"\newpage",
-        r"\section{Detailed Field Comparison}",
+        r"\section{Detailed Field Comparison}\label{sec:field-comparison}",
         r"\begin{tcolorbox}[colback=blue!5!white, colframe=AccentBlue, title=Similarity Thresholds, breakable]",
         r"\textbf{Match Criteria:}",
         r"\begin{itemize}",
@@ -2090,28 +2239,43 @@ def generate_field_level_report(metrics: ValidationMetrics) -> List[str]:
         r"\item \textbf{Case Details}: Similarity > 78\% required for match",
         r"\item \textbf{All other fields}: Similarity > 90\% required for match",
         r"\end{itemize}",
+        r"\textbf{Mismatch Types:}",
+        r"\begin{itemize}",
+        r"\item \textbf{OCR Error}: Text was read incorrectly (e.g., 'Thom'am' vs 'Thomas')",
+        r"\item \textbf{Classification Error}: Value not in AI's schema/ontology (e.g., 'Auditor' not recognized as valid role)",
+        r"\item \textbf{Value not in schema}: AI's training set didn't include this categorical value",
+        r"\end{itemize}",
         r"\end{tcolorbox}",
         r"\vspace{0.3cm}",
         r"\small",
-        r"\begin{longtable}{|p{0.22\textwidth}|p{0.24\textwidth}|p{0.24\textwidth}|c|c|}",
+        r"\begin{longtable}{|p{0.17\textwidth}|p{0.23\textwidth}|p{0.23\textwidth}|c|p{0.12\textwidth}|}",
         r"\hline \textbf{Field} & \textbf{Ground Truth} & \textbf{AI Extraction} & \textbf{Match} & \textbf{Sim} \\ \hline \endhead",
         r"\hline \endfoot",
     ]
 
     for comparison in sorted(metrics.comparisons, key=lambda comp: (comp.category, comp.field_name)):
-        gt_display = comparison.gt_value[:35] + "..." if len(comparison.gt_value) > 35 else comparison.gt_value
-        ai_display = comparison.ai_value[:35] + "..." if len(comparison.ai_value) > 35 else comparison.ai_value
-        field_display = comparison.field_name[:30] + "..." if len(comparison.field_name) > 30 else comparison.field_name
+        gt_display = comparison.gt_value[:30] + "..." if len(comparison.gt_value) > 30 else comparison.gt_value
+        ai_display = comparison.ai_value[:30] + "..." if len(comparison.ai_value) > 30 else comparison.ai_value
+        field_display = comparison.field_name[:25] + "..." if len(comparison.field_name) > 25 else comparison.field_name
         similarity_pct = int(comparison.similarity_score * 100)
         sim_color = get_accuracy_color(similarity_pct)
         match_icon = r"\matchicon" if comparison.is_match else r"\mismatchicon"
+        
+        # Add explanation for categorical mismatches (keep it short to avoid overflow)
+        mismatch_note = ""
+        if not comparison.is_match and comparison.category in ["Agents", "Metadata"]:
+            # Check if this might be a schema/classification error
+            if similarity_pct < 50:
+                mismatch_note = r" \tiny{(schema?)}"
+            else:
+                mismatch_note = r" \tiny{(OCR?)}"
 
         latex.append(
             f"{clean_text_for_xelatex(field_display)} & "
             f"{clean_text_for_xelatex(gt_display)} & "
             f"{clean_text_for_xelatex(ai_display)} & "
             f"{match_icon} & "
-            f"\\textcolor{{{sim_color}}}{{{similarity_pct}}}\\% \\\\ \\hline"
+            f"\\textcolor{{{sim_color}}}{{{similarity_pct}}}\\%{mismatch_note} \\\\ \\hline"
         )
 
     latex.extend([r"\end{longtable}", r"\normalsize"])

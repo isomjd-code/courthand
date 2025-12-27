@@ -58,6 +58,8 @@ def initial_line_extraction(
 
     Crops the image to the bounding box of the polygon with padding, and adjusts
     polygon and baseline coordinates to the cropped coordinate system.
+    Extends the polygon and baseline to the left by BBOX_LEFT_EXTENSION pixels
+    to provide additional context for PyLaia processing.
 
     Args:
         page_image: The full page image to extract from.
@@ -71,18 +73,34 @@ def initial_line_extraction(
         cropped image's coordinate system.
     """
     try:
+        from .config import BBOX_LEFT_EXTENSION
+        
         working_image = page_image.convert("L") if page_image.mode != "L" else page_image
-        xs, ys = [point[0] for point in polygon], [point[1] for point in polygon]
+        
+        # Extend polygon and baseline to the left by BBOX_LEFT_EXTENSION pixels
+        # This provides additional context for PyLaia processing
+        extended_polygon = [(max(0, x - BBOX_LEFT_EXTENSION), y) for x, y in polygon]
+        
+        # Parse and extend baseline
+        baseline_points = [tuple(map(int, pair.split(","))) for pair in baseline_str.split()]
+        extended_baseline = [(max(0, x - BBOX_LEFT_EXTENSION), y) for x, y in baseline_points]
+        
+        # Compute bounding box from extended polygon
+        xs, ys = [point[0] for point in extended_polygon], [point[1] for point in extended_polygon]
         bbox = (
             max(0, min(xs) - padding),
             max(0, min(ys) - padding),
             min(working_image.width, max(xs) + padding),
             min(working_image.height, max(ys) + padding),
         )
+        
+        # Crop image to extended bounding box
         cropped = working_image.crop(bbox)
-        adjusted_polygon = [(x - bbox[0], y - bbox[1]) for x, y in polygon]
-        baseline_points = [tuple(map(int, pair.split(","))) for pair in baseline_str.split()]
-        adjusted_baseline = [(x - bbox[0], y - bbox[1]) for x, y in baseline_points]
+        
+        # Adjust coordinates to the cropped coordinate system
+        adjusted_polygon = [(x - bbox[0], y - bbox[1]) for x, y in extended_polygon]
+        adjusted_baseline = [(x - bbox[0], y - bbox[1]) for x, y in extended_baseline]
+        
         return cropped, adjusted_polygon, adjusted_baseline
     except Exception as exc:
         print(f"ERROR: Failed initial line extraction: {exc}", file=sys.stderr)

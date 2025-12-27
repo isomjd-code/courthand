@@ -285,6 +285,10 @@ def generate_latex_report_for_match(
                     if "Warning: Missing Ground Truth Data" in existing_content or "No ground truth data found" in existing_content:
                         logger.info(f"[Report] GT data now available but file was generated without it. Regenerating: {filename}")
                         should_regenerate = True
+                    # Also check for old problematic hyperlink code that causes LaTeX errors
+                    if "\\hyperlink{sec:field-comparison}" in existing_content and "\\Huge\\hyperlink" in existing_content:
+                        logger.info(f"[Report] Detected old hyperlink code that causes LaTeX errors. Regenerating: {filename}")
+                        should_regenerate = True
             except Exception as e:
                 logger.warning(f"[Report] Could not read existing file to check for GT data: {e}")
         
@@ -368,7 +372,11 @@ def generate_latex_report_for_match(
     latex.extend(generate_cost_breakdown_section(master_data))
     latex.extend(case_content)
     logger.info("[Report] Generating transcription section...")
-    latex.extend(generate_transcription_section(master_data.get("source_material", [])))
+    latex.extend(generate_transcription_section(
+        master_data.get("source_material", []),
+        extracted_entities=extracted_entities,
+        output_dir=output_dir
+    ))
     logger.info("[Report] Generating full text section...")
     latex.extend(generate_full_text_section(master_data))
     logger.info("[Report] Generating field level report...")
