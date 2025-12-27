@@ -2308,6 +2308,20 @@ def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
     return latex
 
 
+def _get_short_basis(basis: str) -> str:
+    """Get shortened abbreviation for similarity basis to fit in table."""
+    basis_map = {
+        "embedding": "Emb",
+        "soundex": "Sdx",
+        "levenshtein": "Lev",
+        "exact_match": "Exact",
+        "special_rule": "Rule",
+        "date_normalization": "Date",
+        "unknown": "?",
+    }
+    return basis_map.get(basis, basis[:4])
+
+
 def generate_field_level_report(metrics: ValidationMetrics) -> List[str]:
     """Generate detailed field-level comparison report."""
     latex = [
@@ -2329,8 +2343,8 @@ def generate_field_level_report(metrics: ValidationMetrics) -> List[str]:
         r"\end{tcolorbox}",
         r"\vspace{0.3cm}",
         r"\small",
-        r"\begin{longtable}{|p{0.17\textwidth}|p{0.23\textwidth}|p{0.23\textwidth}|c|p{0.12\textwidth}|}",
-        r"\hline \textbf{Field} & \textbf{Ground Truth} & \textbf{AI Extraction} & \textbf{Match} & \textbf{Sim} \\ \hline \endhead",
+        r"\begin{longtable}{|p{0.15\textwidth}|p{0.20\textwidth}|p{0.20\textwidth}|c|p{0.18\textwidth}|}",
+        r"\hline \textbf{Field} & \textbf{Ground Truth} & \textbf{AI Extraction} & \textbf{Match} & \textbf{Sim (Basis)} \\ \hline \endhead",
         r"\hline \endfoot",
     ]
 
@@ -2351,15 +2365,15 @@ def generate_field_level_report(metrics: ValidationMetrics) -> List[str]:
             else:
                 mismatch_note = r" \tiny{(OCR?)}"
         
-        # Format similarity basis
-        basis_display = format_similarity_basis(comparison.similarity_basis)
+        # Format similarity basis with shorter abbreviations
+        basis_short = _get_short_basis(comparison.similarity_basis)
 
         latex.append(
             f"{clean_text_for_xelatex(field_display)} & "
             f"{clean_text_for_xelatex(gt_display)} & "
             f"{clean_text_for_xelatex(ai_display)} & "
             f"{match_icon} & "
-            f"\\textcolor{{{sim_color}}}{{{similarity_pct}}}\\% \\tiny{{({basis_display})}}{mismatch_note} \\\\ \\hline"
+            f"\\textcolor{{{sim_color}}}{{{similarity_pct}}}\\%~\\tiny{{({basis_short})}}{mismatch_note} \\\\ \\hline"
         )
 
     latex.extend([r"\end{longtable}", r"\normalsize"])
