@@ -459,6 +459,9 @@ def process_ngrams(
         temp_slice_paths = []  # List of (temp_path, final_output_path, width)
         device = next(model.parameters()).device
         
+        # Normalize n-gram for searching (convert <space> to space character)
+        normalized_ngram = normalize_ngram_for_search(ngram)
+        
         # Process each example and save slices to disk immediately
         extract_start = time.time()
         for example_idx, example in enumerate(examples_found):
@@ -541,13 +544,15 @@ def process_ngrams(
                 
                 decoded_text = ''.join(decoded_chars)
                 
-                # Find n-gram in decoded text
-                decoded_ngram_pos = decoded_text.find(ngram)
+                # Find n-gram in decoded text (using pre-normalized n-gram)
+                decoded_ngram_pos = decoded_text.find(normalized_ngram)
                 if decoded_ngram_pos == -1:
                     # If not found in decoded text, try the ground truth text
                     clean_text = clean_text_for_alignment(example['text'])
-                    ngram_pos = clean_text.find(ngram)
+                    ngram_pos = clean_text.find(normalized_ngram)
                     if ngram_pos == -1:
+                        # N-gram not found in either decoded or ground truth text
+                        # This is expected for some instances - skip silently
                         # Clear memory before continuing
                         del img, img_resized, img_array, img_tensor, output, log_probs, probs
                         if device.type == 'cuda':
@@ -557,19 +562,19 @@ def process_ngrams(
                     # Use proportional mapping as fallback
                     # Map character position to approximate pixel position
                     char_ratio = ngram_pos / len(clean_text)
-                    end_char_ratio = (ngram_pos + len(ngram)) / len(clean_text)
+                    end_char_ratio = (ngram_pos + len(normalized_ngram)) / len(clean_text)
                     start_x = int(char_ratio * new_width)
                     end_x = int(end_char_ratio * new_width)
                 else:
                     # Use decoded positions - more accurate
-                    if decoded_ngram_pos + len(ngram) > len(decoded_times):
+                    if decoded_ngram_pos + len(normalized_ngram) > len(decoded_times):
                         # Clear memory before continuing
                         del img, img_resized, img_array, img_tensor, output, log_probs, probs
                         if device.type == 'cuda':
                             torch.cuda.empty_cache()
                         continue
                     
-                    ngram_times = decoded_times[decoded_ngram_pos:decoded_ngram_pos + len(ngram)]
+                    ngram_times = decoded_times[decoded_ngram_pos:decoded_ngram_pos + len(normalized_ngram)]
                     if not ngram_times:
                         # Clear memory before continuing
                         del img, img_resized, img_array, img_tensor, output, log_probs, probs
@@ -643,6 +648,21 @@ def process_ngrams(
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
                 continue
+        
+        # Check if any slices were extracted
+        if len(temp_slice_paths) == 0:
+            print(f"    Warning: No slices extracted for '{ngram}' ({len(examples_found)} instances processed)")
+            print(f"      This usually means the n-gram wasn't found in the decoded/cleaned text for any instance")
+            print(f"      Normalized n-gram: '{normalize_ngram_for_search(ngram)}'")
+            # Clean up temp directory
+            if os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception:
+                    pass
+            continue
+        
+        print(f"    Successfully extracted {len(temp_slice_paths)} slices from {len(examples_found)} instances")
         
         # After processing all instances for this n-gram, filter to keep only the 5% closest to centroid
         if len(temp_slice_paths) > 1:
