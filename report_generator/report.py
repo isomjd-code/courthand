@@ -405,6 +405,18 @@ def generate_latex_report_for_match(
         print(f"  Case Match Score: {match_score*100:.1f}%")
     print(f"\n  Compile with: xelatex {filename}\n{'='*60}\n")
 
+    # Save validation metrics to master_record.json
+    logger.info("[Report] Saving validation metrics to master_record.json...")
+    _save_validation_report_data(
+        master_data=master_data,
+        metrics=metrics,
+        extracted_entities=extracted_entities,
+        source_material=source_material,
+        output_dir=output_dir,
+        input_images_dir=input_images_dir
+    )
+    logger.info("[Report] Validation metrics saved successfully")
+
     return metrics
 
 
