@@ -542,11 +542,14 @@ def compare_field(
         # One empty, one not (and not the special case above)
         similarity = 0.0
         is_match = False
-    elif GEMINI_AVAILABLE and api_key and gt_str_normalized and ai_str_normalized:
+    elif gt_str_normalized and ai_str_normalized:
+        # Always use semantic similarity (Gemini embeddings) when available
+        # Only fall back to Levenshtein if embeddings are truly unavailable
         similarity = get_similarity_score(gt_str_normalized, ai_str_normalized, api_key, context=f"field_comparison:{field_name}")
         is_match = similarity >= field_threshold
     else:
-        similarity = calculate_similarity(gt_str_normalized, ai_str_normalized)
+        # Both normalized strings are empty (shouldn't happen after normalization, but handle it)
+        similarity = 1.0 if not gt_str_normalized and not ai_str_normalized else 0.0
         is_match = similarity >= field_threshold
 
     comparison = FieldComparison(
@@ -645,17 +648,36 @@ def smart_reconstruct_and_match(
             results.append({"type": "unmatched_gt", "gt": gt_text, "ai": ""})
         return results
 
+    # Use category-specific alignment threshold
+    # Case Details blocks often have semantic variations (abbreviations vs full names, etc.)
+    # so we use a lower threshold to allow for more flexible matching
+    if category == "Case Details":
+        alignment_threshold = 0.55  # Lower threshold for Case Details to handle semantic variations
+    else:
+        alignment_threshold = ALIGNMENT_THRESHOLD
+
     gt_embeddings = get_batch_embeddings(gt_sentences, api_key, context=f"smart_match_gt:{category}")
     ai_embeddings = get_batch_embeddings(ai_sentences, api_key, context=f"smart_match_ai:{category}")
 
     if len(gt_embeddings) == n_gt and len(ai_embeddings) == n_ai:
+        # Use batch embeddings for semantic similarity
         similarity_matrix = cosine_similarity(gt_embeddings, ai_embeddings)
         cost_matrix = 1.0 - similarity_matrix
     else:
+        # Batch embeddings failed or unavailable - use pairwise semantic similarity
+        # This ensures we always use semantic similarity when API is available
+        logger.info(f"[Report Generation]   Batch embeddings unavailable, computing pairwise semantic similarity")
         cost_matrix = np.ones((n_gt, n_ai))
         for r in range(n_gt):
             for c in range(n_ai):
-                score = calculate_similarity(gt_sentences[r], ai_sentences[c])
+                # Use get_similarity_score which uses Gemini embeddings for semantic similarity
+                # Falls back to Levenshtein only if embeddings are truly unavailable
+                score = get_similarity_score(
+                    gt_sentences[r], 
+                    ai_sentences[c], 
+                    api_key, 
+                    context=f"smart_match_pairwise:{category}"
+                )
                 cost_matrix[r, c] = 1.0 - score
 
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -668,17 +690,17 @@ def smart_reconstruct_and_match(
         gt_text = gt_sentences[gt_idx]
         ai_text = ai_sentences[ai_idx]
 
-        logger.debug(f"[Report Generation]     GT[{gt_idx}] vs AI[{ai_idx}]: similarity={similarity:.3f}, threshold={ALIGNMENT_THRESHOLD}")
-        if similarity >= ALIGNMENT_THRESHOLD:
+        logger.debug(f"[Report Generation]     GT[{gt_idx}] vs AI[{ai_idx}]: similarity={similarity:.3f}, threshold={alignment_threshold}")
+        if similarity >= alignment_threshold:
             compare_field(gt_text, ai_text, f"{category} Block", category, metrics, api_key=api_key)
             matches_map[gt_idx] = {"type": "match", "gt": gt_text, "ai": ai_text, "score": float(similarity)}
-            logger.debug(f"[Report Generation]     -> MATCH (similarity {similarity:.3f} >= {ALIGNMENT_THRESHOLD})")
+            logger.debug(f"[Report Generation]     -> MATCH (similarity {similarity:.3f} >= {alignment_threshold})")
         else:
             # Don't penalize AI for GT entries that don't have corresponding AI entries
             # Skip compare_field call so unmatched GT items don't affect accuracy metrics
             matches_map[gt_idx] = {"type": "unmatched_gt", "gt": gt_text, "ai": ""}
             ai_matched_indices.discard(ai_idx)
-            logger.debug(f"[Report Generation]     -> NO MATCH (similarity {similarity:.3f} < {ALIGNMENT_THRESHOLD})")
+            logger.debug(f"[Report Generation]     -> NO MATCH (similarity {similarity:.3f} < {alignment_threshold})")
 
     for r in range(n_gt):
         if r in matches_map:
