@@ -870,13 +870,85 @@ def run_batch_post_correction(
     
     logger.info(f"[{batch_id}] Processing {len(image_lines_map)} images with Gemini 3 Flash Preview batch API...")
     
+    # Helper functions for batch cache management
+    def get_batch_cache_path(batch_id: str, output_dir: str = None) -> str:
+        """Get the path to the batch ID cache file."""
+        safe_id = re.sub(r'[^a-zA-Z0-9]', '_', batch_id)
+        cache_dir = output_dir if output_dir else WORK_DIR
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"batch_cache_{safe_id}.json")
+    
+    def get_cached_batch_id(batch_id: str, output_dir: str = None, force: bool = False) -> Optional[str]:
+        """Retrieve a cached batch job ID if it exists."""
+        cache_path = get_batch_cache_path(batch_id, output_dir)
+        if os.path.exists(cache_path) and not force:
+            try:
+                with open(cache_path, 'r') as f:
+                    cache_data = json.load(f)
+                    job_name = cache_data.get('job_name')
+                    if job_name:
+                        # Verify the batch job still exists and is not completed
+                        try:
+                            batch_job_check = client.batches.get(name=job_name)
+                            completed_states = {'JOB_STATE_SUCCEEDED', 'JOB_STATE_FAILED', 'JOB_STATE_CANCELLED', 'JOB_STATE_EXPIRED'}
+                            def get_state_name(batch_job):
+                                if hasattr(batch_job.state, 'name'):
+                                    return batch_job.state.name
+                                elif isinstance(batch_job.state, str):
+                                    return batch_job.state
+                                else:
+                                    return str(batch_job.state)
+                            current_state = get_state_name(batch_job_check)
+                            if current_state not in completed_states:
+                                logger.info(f"[{batch_id}] Found cached batch ID: {job_name}, resuming polling")
+                                return job_name
+                            elif current_state == 'JOB_STATE_SUCCEEDED':
+                                logger.info(f"[{batch_id}] Cached batch {job_name} is already completed ({current_state}), retrieving and processing results")
+                                return job_name
+                            else:
+                                logger.info(f"[{batch_id}] Cached batch {job_name} is in completed state ({current_state}), creating new batch")
+                        except Exception as e:
+                            logger.warning(f"[{batch_id}] Cached batch {job_name} no longer exists: {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"[{batch_id}] Failed to read batch cache: {e}")
+        return None
+    
+    def save_batch_id(batch_id: str, job_name: str, output_dir: str = None) -> None:
+        """Save a batch job ID to cache."""
+        cache_path = get_batch_cache_path(batch_id, output_dir)
+        try:
+            with open(cache_path, 'w') as f:
+                json.dump({
+                    "job_name": job_name,
+                    "batch_id": batch_id,
+                    "created_at": time.time()
+                }, f, indent=2)
+            logger.debug(f"[{batch_id}] Saved batch ID to cache: {job_name}")
+        except Exception as e:
+            logger.warning(f"[{batch_id}] Failed to save batch cache: {e}")
+    
+    # Check for cached batch ID BEFORE uploading line images
+    cached_job_name = get_cached_batch_id(batch_id, out_dir, force=False)
+    batch_job = None
+    
+    if cached_job_name:
+        try:
+            batch_job = client.batches.get(name=cached_job_name)
+            logger.info(f"[{batch_id}] Found cached batch: {cached_job_name}, skipping line image uploads")
+        except Exception as e:
+            logger.warning(f"[{batch_id}] Failed to resume cached batch, creating new: {e}")
+            batch_job = None
+    
     # Create temporary directory for batch files
     temp_dir = Path(tempfile.mkdtemp())
     jsonl_file = temp_dir / "batch_requests.jsonl"
     
     try:
-        # Prepare batch requests in JSONL format
-        with open(jsonl_file, 'w', encoding='utf-8') as f:
+        # Only prepare batch requests and upload line images if we don't have a cached batch
+        if not batch_job:
+            # Prepare batch requests in JSONL format
+            with open(jsonl_file, 'w', encoding='utf-8') as f:
             for idx, (image_path, data) in enumerate(image_lines_map.items()):
                 lines = data['lines']
                 image_name = data['image_name']
@@ -1077,83 +1149,12 @@ def run_batch_post_correction(
                 f.write(json.dumps(request_obj) + "\n")
                 logger.info(f"[{batch_id}] Added batch request for {key} with {num_line_images} line images")
         
-        # Check if we have any requests
-        if jsonl_file.stat().st_size == 0:
-            logger.warning(f"[{batch_id}] No valid requests in batch file")
-            return {"results": {}, "token_usage": None}
-        
-        # Check for cached batch ID first
-        def get_batch_cache_path(batch_id: str, output_dir: str = None) -> str:
-            """Get the path to the batch ID cache file."""
-            safe_id = re.sub(r'[^a-zA-Z0-9]', '_', batch_id)
-            cache_dir = output_dir if output_dir else WORK_DIR
-            os.makedirs(cache_dir, exist_ok=True)
-            return os.path.join(cache_dir, f"batch_cache_{safe_id}.json")
-        
-        def get_cached_batch_id(batch_id: str, output_dir: str = None, force: bool = False) -> Optional[str]:
-            """Retrieve a cached batch job ID if it exists."""
-            cache_path = get_batch_cache_path(batch_id, output_dir)
-            if os.path.exists(cache_path) and not force:
-                try:
-                    with open(cache_path, 'r') as f:
-                        cache_data = json.load(f)
-                        job_name = cache_data.get('job_name')
-                        if job_name:
-                            # Verify the batch job still exists and is not completed
-                            try:
-                                batch_job_check = client.batches.get(name=job_name)
-                                completed_states = {'JOB_STATE_SUCCEEDED', 'JOB_STATE_FAILED', 'JOB_STATE_CANCELLED', 'JOB_STATE_EXPIRED'}
-                                def get_state_name(batch_job):
-                                    if hasattr(batch_job.state, 'name'):
-                                        return batch_job.state.name
-                                    elif isinstance(batch_job.state, str):
-                                        return batch_job.state
-                                    else:
-                                        return str(batch_job.state)
-                                current_state = get_state_name(batch_job_check)
-                                if current_state not in completed_states:
-                                    logger.info(f"[{batch_id}] Found cached batch ID: {job_name}, resuming polling")
-                                    return job_name
-                                elif current_state == 'JOB_STATE_SUCCEEDED':
-                                    logger.info(f"[{batch_id}] Cached batch {job_name} is already completed ({current_state}), retrieving and processing results")
-                                    return job_name
-                                else:
-                                    logger.info(f"[{batch_id}] Cached batch {job_name} is in completed state ({current_state}), creating new batch")
-                            except Exception as e:
-                                logger.warning(f"[{batch_id}] Cached batch {job_name} no longer exists: {e}")
-                    return None
-                except Exception as e:
-                    logger.warning(f"[{batch_id}] Failed to read batch cache: {e}")
-            return None
-        
-        def save_batch_id(batch_id: str, job_name: str, output_dir: str = None) -> None:
-            """Save a batch job ID to cache."""
-            cache_path = get_batch_cache_path(batch_id, output_dir)
-            try:
-                with open(cache_path, 'w') as f:
-                    json.dump({
-                        "job_name": job_name,
-                        "batch_id": batch_id,
-                        "created_at": time.time()
-                    }, f, indent=2)
-                logger.debug(f"[{batch_id}] Saved batch ID to cache: {job_name}")
-            except Exception as e:
-                logger.warning(f"[{batch_id}] Failed to save batch cache: {e}")
-        
-        # Try to resume from cache
-        cached_job_name = get_cached_batch_id(batch_id, out_dir, force=False)
-        batch_job = None
-        
-        if cached_job_name:
-            try:
-                batch_job = client.batches.get(name=cached_job_name)
-                logger.info(f"[{batch_id}] Resuming cached batch: {cached_job_name}")
-            except Exception as e:
-                logger.warning(f"[{batch_id}] Failed to resume cached batch, creating new: {e}")
-                batch_job = None
-        
-        # Upload and create batch if not resuming
-        if not batch_job:
+            # Check if we have any requests
+            if jsonl_file.stat().st_size == 0:
+                logger.warning(f"[{batch_id}] No valid requests in batch file")
+                return {"results": {}, "token_usage": None}
+            
+            # Upload and create batch
             # Upload JSONL file
             logger.info(f"[{batch_id}] Uploading batch file...")
             uploaded_file = client.files.upload(
