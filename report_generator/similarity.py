@@ -772,7 +772,8 @@ def smart_reconstruct_and_match(
     if len(gt_embeddings) == n_gt and len(ai_embeddings) == n_ai:
         # Use batch embeddings for semantic similarity
         logger.info(f"[Report Generation] ✓ Using BATCH Gemini embeddings for {category} matching")
-        logger.info(f"[Report Generation]   GT embeddings: {len(gt_embeddings)} vectors, AI embeddings: {len(ai_embeddings)} vectors")
+        logger.info(f"[Report Generation]   Batch computing embeddings: {n_gt} GT + {n_ai} AI = {n_gt + n_ai} total embedding calls")
+        logger.info(f"[Report Generation]   Building cost matrix: {n_gt} x {n_ai} comparisons using cosine similarity on batch embeddings")
         similarity_matrix = cosine_similarity(gt_embeddings, ai_embeddings)
         cost_matrix = 1.0 - similarity_matrix
     else:
@@ -838,7 +839,7 @@ def smart_reconstruct_and_match(
     return results
 
 
-def _format_agent_for_matching(agent: Dict) -> str:
+def format_agent_for_matching(agent: Dict) -> str:
     """
     Format agent as comma-separated string: "Name, Role, Occupation, Status".
     
@@ -855,6 +856,37 @@ def _format_agent_for_matching(agent: Dict) -> str:
     
     # Format as "Name, Role, Occupation, Status" (empty fields still included)
     return f"{name}, {role}, {occupation}, {status}"
+
+
+def compute_name_similarity(agent1: Dict, agent2: Dict) -> float:
+    """
+    Compute name similarity between two agents using the same logic as find_best_party_match.
+    
+    Returns:
+        Name similarity score between 0.0 and 1.0
+    """
+    target_name = get_person_name(agent1)
+    candidate_name = get_person_name(agent2)
+    target_name_normalized = normalize_name_for_comparison(target_name)
+    candidate_name_normalized = normalize_name_for_comparison(candidate_name)
+    
+    # Check soundex first: if surname soundex codes match, use 100% similarity
+    target_surname = get_surname_from_name(target_name_normalized)
+    candidate_surname = get_surname_from_name(candidate_name_normalized)
+    if target_surname and candidate_surname:
+        target_surname_soundex = soundex(target_surname)
+        candidate_surname_soundex = soundex(candidate_surname)
+        if target_surname_soundex and candidate_surname_soundex and target_surname_soundex == candidate_surname_soundex:
+            return 1.0  # 100% similarity for identical surname soundex
+        else:
+            # Check if surnames are very similar (high Levenshtein similarity)
+            surname_similarity = calculate_similarity(target_surname, candidate_surname)
+            if surname_similarity >= 0.85:  # 85% similarity threshold for surnames
+                return 1.0  # 100% similarity for very similar surnames
+            else:
+                return calculate_similarity(target_name_normalized, candidate_name_normalized)
+    else:
+        return calculate_similarity(target_name_normalized, candidate_name_normalized)
 
 
 def find_best_party_match(target: Dict, candidates: List[Dict], api_key: Optional[str]) -> Tuple[Optional[Dict], float]:
@@ -878,39 +910,14 @@ def find_best_party_match(target: Dict, candidates: List[Dict], api_key: Optiona
     target_name_normalized = normalize_name_for_comparison(target_name)
     
     # Format target as comma-separated string
-    target_string = _format_agent_for_matching(target)
+    target_string = format_agent_for_matching(target)
     
     for candidate in candidates:
-        # Extract candidate name for name-based weighting and normalize
-        candidate_name = get_person_name(candidate)
-        candidate_name_normalized = normalize_name_for_comparison(candidate_name)
-        
         # Format candidate as comma-separated string
-        candidate_string = _format_agent_for_matching(candidate)
+        candidate_string = format_agent_for_matching(candidate)
         
-        # NAME SIMILARITY: Use Levenshtein (string-based) for names
-        # This is more accurate for proper nouns than semantic matching
-        # Use normalized names (with " de " removed) for comparison
-        # Check soundex first: if surname soundex codes match, use 100% similarity
-        # Also check if surnames are very similar (high Levenshtein similarity)
-        target_surname = get_surname_from_name(target_name_normalized)
-        candidate_surname = get_surname_from_name(candidate_name_normalized)
-        if target_surname and candidate_surname:
-            target_surname_soundex = soundex(target_surname)
-            candidate_surname_soundex = soundex(candidate_surname)
-            if target_surname_soundex and candidate_surname_soundex and target_surname_soundex == candidate_surname_soundex:
-                name_score = 1.0  # 100% similarity for identical surname soundex
-            else:
-                # Check if surnames are very similar (high Levenshtein similarity)
-                # This catches cases like "Kyngesford" vs "Kingsford" where soundex differs
-                # but the names are phonetically very similar
-                surname_similarity = calculate_similarity(target_surname, candidate_surname)
-                if surname_similarity >= 0.85:  # 85% similarity threshold for surnames
-                    name_score = 1.0  # 100% similarity for very similar surnames
-                else:
-                    name_score = calculate_similarity(target_name_normalized, candidate_name_normalized)
-        else:
-            name_score = calculate_similarity(target_name_normalized, candidate_name_normalized)
+        # NAME SIMILARITY: Use helper function to compute name similarity
+        name_score = compute_name_similarity(target, candidate)
         
         # OVERALL SEMANTIC SIMILARITY: Single API call for all fields
         if GEMINI_AVAILABLE and api_key and target_string and candidate_string:

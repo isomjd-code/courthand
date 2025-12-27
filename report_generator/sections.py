@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 from scipy.optimize import linear_sum_assignment
+from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,13 @@ from .similarity import (
     ValidationMetrics,
     calculate_similarity,
     compare_field,
+    compute_name_similarity,
     find_best_party_match,
+    format_agent_for_matching,
     format_comparison_cell,
     format_similarity_basis,
     get_accuracy_color,
+    get_batch_embeddings,
     smart_reconstruct_and_match,
 )
 from .text_utils import (
@@ -1948,17 +1952,67 @@ def _generate_individuals_table(
 
     # Build cost matrix: rows = GT agents, columns = AI agents
     # Cost = 1 - similarity_score (lower is better for Hungarian algorithm)
+    # Optimized: Compute embeddings once for all agents, then use cosine similarity
     n_gt = len(gt_agents)
     n_ai = len(ai_agents)
     cost_matrix = np.ones((n_gt, n_ai))
     
-    logger.info(f"[Report Generation]   Building cost matrix: {len(gt_agents)} x {len(ai_agents)} comparisons (each uses 1 embedding call)")
+    # Format all agents as strings for embedding
+    gt_agent_strings = [format_agent_for_matching(agent) for agent in gt_agents]
+    ai_agent_strings = [format_agent_for_matching(agent) for agent in ai_agents]
+    
+    # Compute name similarities for all pairs (cheap, no API calls)
+    logger.info(f"[Report Generation]   Building cost matrix: {len(gt_agents)} x {len(ai_agents)} comparisons")
+    logger.info(f"[Report Generation]   Computing name similarities for all pairs...")
+    name_similarity_matrix = np.zeros((n_gt, n_ai))
     for i, gt_agent in enumerate(gt_agents):
         for j, ai_agent in enumerate(ai_agents):
-            _, similarity = find_best_party_match(gt_agent, [ai_agent], api_key)
+            name_similarity_matrix[i, j] = compute_name_similarity(gt_agent, ai_agent)
+    
+    # Batch compute embeddings for semantic similarity
+    if GEMINI_AVAILABLE and api_key:
+        logger.info(f"[Report Generation]   Batch computing embeddings: {n_gt} GT + {n_ai} AI = {n_gt + n_ai} total embedding calls")
+        gt_embeddings = get_batch_embeddings(
+            gt_agent_strings,
+            api_key,
+            context="cost_matrix_gt_agents",
+            require_embeddings=False,
+        )
+        ai_embeddings = get_batch_embeddings(
+            ai_agent_strings,
+            api_key,
+            context="cost_matrix_ai_agents",
+            require_embeddings=False,
+        )
+        
+        if len(gt_embeddings) == n_gt and len(ai_embeddings) == n_ai:
+            # Compute semantic similarity matrix using cosine similarity
+            semantic_similarity_matrix = cosine_similarity(gt_embeddings, ai_embeddings)
+            
+            # Combine name similarity (70%) and semantic similarity (30%) using the same weighting as find_best_party_match
+            combined_similarity_matrix = 0.7 * name_similarity_matrix + 0.3 * semantic_similarity_matrix
+            
             # Convert similarity to cost (1 - similarity)
-            # If no match found, similarity will be low, cost will be high
-            cost_matrix[i, j] = 1.0 - similarity
+            cost_matrix = 1.0 - combined_similarity_matrix
+            logger.info(f"[Report Generation]   ✓ Cost matrix built using batch embeddings")
+        else:
+            # Batch embeddings failed, fall back to original approach
+            logger.warning(f"[Report Generation]   Batch embeddings incomplete, falling back to pairwise comparison")
+            logger.warning(f"[Report Generation]   Expected {n_gt} GT and {n_ai} AI embeddings, got {len(gt_embeddings)} and {len(ai_embeddings)}")
+            for i, gt_agent in enumerate(gt_agents):
+                for j, ai_agent in enumerate(ai_agents):
+                    _, similarity = find_best_party_match(gt_agent, [ai_agent], api_key)
+                    cost_matrix[i, j] = 1.0 - similarity
+    else:
+        # Embeddings not available, use name similarity + Levenshtein similarity on full strings
+        logger.info(f"[Report Generation]   Embeddings not available, using name similarity + Levenshtein on full strings")
+        semantic_similarity_matrix = np.zeros((n_gt, n_ai))
+        for i, gt_string in enumerate(gt_agent_strings):
+            for j, ai_string in enumerate(ai_agent_strings):
+                semantic_similarity_matrix[i, j] = calculate_similarity(gt_string, ai_string)
+        # Combine name similarity (70%) and Levenshtein similarity (30%) to match find_best_party_match behavior
+        combined_similarity_matrix = 0.7 * name_similarity_matrix + 0.3 * semantic_similarity_matrix
+        cost_matrix = 1.0 - combined_similarity_matrix
     
     # Use Hungarian algorithm to find optimal assignment
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
