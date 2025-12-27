@@ -63,14 +63,20 @@ def train_model(dataname='LatinBHOtrH32', name_prefix='latin_bho', **kwargs):
         '--dataset_mode', 'text',
         '--model', 'ScrabbleGAN',
         '--input_nc', '1',  # Grayscale
-        '--resolution', '32',
+        '--resolution', str(kwargs.get('resolution', 32)),  # Use provided resolution or default to 32
         # Note: --labeled uses action='store_false', so we don't pass it
         # (default is labeled=True, which is what we want)
     ]
     
+    # Add continue_train flag if needed
+    if kwargs.get('continue_train', False):
+        cmd.append('--continue_train')
+    
     # Add any additional arguments
+    # Note: ScrabbleGAN uses underscores in argument names (e.g., --G_depth, --batch_size)
+    # so we preserve underscores instead of converting to hyphens
     for key, value in kwargs.items():
-        if value is not None:
+        if value is not None and key not in ['resolution', 'continue_train']:
             cmd.extend([f'--{key}', str(value)])
     
     print(f"Running command: {' '.join(cmd)}")
@@ -97,6 +103,16 @@ def main():
                         help='Number of epochs (default: use ScrabbleGAN default)')
     parser.add_argument('--batch-size', type=int, default=None,
                         help='Batch size (default: use ScrabbleGAN default)')
+    parser.add_argument('--resolution', type=int, default=32,
+                        help='Image resolution (default: 32, must match checkpoint)')
+    parser.add_argument('--continue-train', action='store_true',
+                        help='Continue training from latest checkpoint')
+    parser.add_argument('--D-lr', type=float, default=None,
+                        help='Discriminator learning rate (default: 0.0002)')
+    parser.add_argument('--num-critic-train', type=int, default=None,
+                        help='Number of critic training steps (default: 4)')
+    parser.add_argument('--G-depth', type=int, default=None,
+                        help='Generator depth (number of resblocks per stage, default: 1)')
     
     args = parser.parse_args()
     
@@ -115,6 +131,16 @@ def main():
             train_kwargs['niter_decay'] = 0
         if args.batch_size:
             train_kwargs['batch_size'] = args.batch_size
+        if args.resolution:
+            train_kwargs['resolution'] = args.resolution
+        if args.continue_train:
+            train_kwargs['continue_train'] = True
+        if args.D_lr:
+            train_kwargs['D_lr'] = args.D_lr
+        if args.num_critic_train:
+            train_kwargs['num_critic_train'] = args.num_critic_train
+        if args.G_depth:
+            train_kwargs['G_depth'] = args.G_depth
         
         success = train_model(
             dataname=args.dataname,
