@@ -79,15 +79,23 @@ def get_field_threshold(field_name: str, category: str) -> float:
         return 0.90
 
 
-def get_similarity_score(text1: str, text2: str, api_key: Optional[str], context: str = "field_comparison") -> float:
-    """Calculate semantic similarity via Gemini embeddings."""
+def get_similarity_score(text1: str, text2: str, api_key: Optional[str], context: str = "field_comparison") -> Tuple[float, str]:
+    """
+    Calculate semantic similarity via Gemini embeddings.
+    
+    Returns:
+        Tuple of (similarity_score, basis) where basis is one of:
+        - "exact_match": text1 == text2
+        - "embedding": Gemini embeddings similarity
+        - "levenshtein": Levenshtein similarity (fallback)
+    """
     if text1 == text2:
-        return 1.0
+        return 1.0, "exact_match"
     if not text1 or not text2:
-        return 0.0
+        return 0.0, "levenshtein"
     if not (GEMINI_AVAILABLE and api_key):
         logger.debug(f"[Embedding API] Falling back to Levenshtein similarity for {context} (embeddings unavailable)")
-        return calculate_similarity(text1, text2)
+        return calculate_similarity(text1, text2), "levenshtein"
 
     try:
         # Log the embedding API call
@@ -107,10 +115,10 @@ def get_similarity_score(text1: str, text2: str, api_key: Optional[str], context
         similarity_matrix = cosine_similarity(embeddings)
         similarity = float(similarity_matrix[0][1])
         logger.debug(f"[Embedding API]   Similarity score: {similarity:.3f}")
-        return similarity
+        return similarity, "embedding"
     except Exception as e:
         logger.warning(f"[Embedding API] Embedding call failed for {context}, falling back to Levenshtein: {e}")
-        return calculate_similarity(text1, text2)
+        return calculate_similarity(text1, text2), "levenshtein"
 
 
 @dataclass
@@ -123,6 +131,7 @@ class FieldComparison:
     is_match: bool
     similarity_score: float
     category: str = "general"
+    similarity_basis: str = "unknown"  # "embedding", "soundex", "levenshtein", "exact_match", "special_rule", "date_normalization"
 
 
 @dataclass
@@ -184,6 +193,7 @@ class ValidationMetrics:
                     "is_match": comp.is_match,
                     "similarity_score": comp.similarity_score,
                     "category": comp.category,
+                    "similarity_basis": comp.similarity_basis,
                 }
                 for comp in self.comparisons
             ],
@@ -272,6 +282,7 @@ def compare_field(
                     is_match=is_match,
                     similarity_score=similarity,
                     category=category,
+                    similarity_basis="soundex",
                 )
                 metrics.add(comparison)
                 return comparison
@@ -289,6 +300,7 @@ def compare_field(
                     is_match=is_match,
                     similarity_score=similarity,
                     category=category,
+                    similarity_basis="levenshtein",
                 )
                 metrics.add(comparison)
                 return comparison
@@ -308,6 +320,7 @@ def compare_field(
                 is_match=is_match,
                 similarity_score=similarity,
                 category=category,
+                similarity_basis="date_normalization",
             )
             metrics.add(comparison)
             return comparison
@@ -334,6 +347,7 @@ def compare_field(
                     is_match=is_match,
                     similarity_score=similarity,
                     category=category,
+                    similarity_basis="special_rule",
                 )
                 metrics.add(comparison)
                 return comparison
@@ -362,6 +376,7 @@ def compare_field(
                         is_match=is_match,
                         similarity_score=similarity,
                         category=category,
+                        similarity_basis="special_rule",
                     )
                     metrics.add(comparison)
                     return comparison
@@ -402,6 +417,7 @@ def compare_field(
                 is_match=is_match,
                 similarity_score=similarity,
                 category=category,
+                similarity_basis="special_rule",
             )
             metrics.add(comparison)
             return comparison
@@ -419,6 +435,7 @@ def compare_field(
                 is_match=is_match,
                 similarity_score=similarity,
                 category=category,
+                similarity_basis="special_rule",
             )
             metrics.add(comparison)
             return comparison
@@ -445,6 +462,7 @@ def compare_field(
                     is_match=is_match,
                     similarity_score=similarity,
                     category=category,
+                    similarity_basis="special_rule",
                 )
                 metrics.add(comparison)
                 return comparison
@@ -475,6 +493,7 @@ def compare_field(
                     is_match=is_match,
                     similarity_score=similarity,
                     category=category,
+                    similarity_basis="special_rule",
                 )
                 metrics.add(comparison)
                 return comparison
@@ -510,18 +529,22 @@ def compare_field(
                     is_match=is_match,
                     similarity_score=similarity,
                     category=category,
+                    similarity_basis="special_rule",
                 )
                 metrics.add(comparison)
                 return comparison
     
     # Special case: Agent Status - if GT is empty but AI has value, don't penalize
+    similarity_basis = "unknown"
     if field_name == "Agent Status" and not gt_str and ai_str:
         similarity = 1.0  # Perfect match (no penalty)
         is_match = True
+        similarity_basis = "special_rule"
     # Special case: Agent Occupation - if GT is empty but AI has value, don't penalize
     elif field_name == "Agent Occupation" and not gt_str and ai_str:
         similarity = 1.0  # Perfect match (no penalty)
         is_match = True
+        similarity_basis = "special_rule"
     # Special case: Agent Location - if GT is "london" or "london, england" and AI is empty, don't penalize
     elif field_name == "Agent Location" and gt_str and not ai_str:
         # Normalize GT string for comparison (lowercase, remove extra whitespace)
@@ -531,27 +554,32 @@ def compare_field(
         if gt_normalized == "london" or (gt_normalized.startswith("london,") and "england" in gt_normalized):
             similarity = 1.0  # Perfect match (no penalty)
             is_match = True
+            similarity_basis = "special_rule"
         else:
             # GT has value but AI is empty, and it's not london - treat as mismatch
             similarity = 0.0
             is_match = False
+            similarity_basis = "levenshtein"
     elif not gt_str and not ai_str:
         # Both empty - perfect match
         similarity = 1.0
         is_match = True
+        similarity_basis = "exact_match"
     elif not gt_str or not ai_str:
         # One empty, one not (and not the special case above)
         similarity = 0.0
         is_match = False
+        similarity_basis = "levenshtein"
     elif gt_str_normalized and ai_str_normalized:
         # Always use semantic similarity (Gemini embeddings) when available
         # Only fall back to Levenshtein if embeddings are truly unavailable
-        similarity = get_similarity_score(gt_str_normalized, ai_str_normalized, api_key, context=f"field_comparison:{field_name}")
+        similarity, similarity_basis = get_similarity_score(gt_str_normalized, ai_str_normalized, api_key, context=f"field_comparison:{field_name}")
         is_match = similarity >= field_threshold
     else:
         # Both normalized strings are empty (shouldn't happen after normalization, but handle it)
         similarity = 1.0 if not gt_str_normalized and not ai_str_normalized else 0.0
         is_match = similarity >= field_threshold
+        similarity_basis = "exact_match" if similarity == 1.0 else "levenshtein"
 
     comparison = FieldComparison(
         field_name=field_name,
@@ -560,6 +588,7 @@ def compare_field(
         is_match=is_match,
         similarity_score=similarity,
         category=category,
+        similarity_basis=similarity_basis,
     )
     metrics.add(comparison)
     return comparison
@@ -582,14 +611,35 @@ def format_comparison_cell(comparison: FieldComparison) -> str:
     ai_safe = clean_text_for_xelatex(comparison.ai_value) if comparison.ai_value else r"\textit{N/A}"
 
     if comparison.is_match:
-        return f"\\textcolor{{MatchColor}}{{{ai_safe}}}"
+        # Include basis information even for matches
+        basis_display = format_similarity_basis(comparison.similarity_basis)
+        return f"\\textcolor{{MatchColor}}{{{ai_safe}}} \\newline \\textcolor{{MetaColor}}{{\\scriptsize {basis_display}}}"
 
     similarity_pct = int(comparison.similarity_score * 100)
+    basis_display = format_similarity_basis(comparison.similarity_basis)
     return (
         f"\\gtlabel~{gt_safe} \\newline "
         f"\\ailabel~{ai_safe} \\newline "
-        f"\\textcolor{{MetaColor}}{{\\scriptsize Similarity: {similarity_pct}\\%}}"
+        f"\\textcolor{{MetaColor}}{{\\scriptsize Similarity: {similarity_pct}\\% ({basis_display})}}"
     )
+
+
+def format_similarity_basis(basis: str) -> str:
+    """Format similarity basis for display."""
+    basis_map = {
+        "embedding": "Embedding",
+        "soundex": "Soundex",
+        "levenshtein": "Levenshtein",
+        "exact_match": "Exact Match",
+        "special_rule": "Special Rule",
+        "date_normalization": "Date Normalization",
+        "unknown": "Unknown",
+    }
+    return basis_map.get(basis, basis.title())
+
+
+# Alias for backward compatibility
+_format_similarity_basis = format_similarity_basis
 
 
 def get_batch_embeddings(texts: List[str], api_key: Optional[str], context: str = "batch_processing", require_embeddings: bool = False) -> np.ndarray:
@@ -742,7 +792,7 @@ def smart_reconstruct_and_match(
             for c in range(n_ai):
                 # Use get_similarity_score which uses Gemini embeddings for semantic similarity
                 # Falls back to Levenshtein only if embeddings are truly unavailable
-                score = get_similarity_score(
+                score, _ = get_similarity_score(
                     gt_sentences[r], 
                     ai_sentences[c], 
                     api_key, 
@@ -864,7 +914,7 @@ def find_best_party_match(target: Dict, candidates: List[Dict], api_key: Optiona
         
         # OVERALL SEMANTIC SIMILARITY: Single API call for all fields
         if GEMINI_AVAILABLE and api_key and target_string and candidate_string:
-            overall_semantic_score = get_similarity_score(target_string, candidate_string, api_key, context=f"party_match:{target_name_normalized[:30]}")
+            overall_semantic_score, _ = get_similarity_score(target_string, candidate_string, api_key, context=f"party_match:{target_name_normalized[:30]}")
         else:
             # Fallback to Levenshtein for the full string
             overall_semantic_score = calculate_similarity(target_string, candidate_string)

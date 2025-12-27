@@ -75,6 +75,6 @@ UNSHARP_MASK_RADIUS = 1.0
 FINAL_GAMMA = 0.85
 """Gamma correction for final output (< 1 darkens midtones/text, > 1 lightens)."""
 
-BBOX_LEFT_EXTENSION = 200
+BBOX_LEFT_EXTENSION = 150
 """Number of pixels to extend bounding boxes and baselines to the left for line image extraction.
 This makes PyLaia operate on a longer line image with additional context on the left side."""

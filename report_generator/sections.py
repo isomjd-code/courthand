@@ -33,6 +33,7 @@ from .similarity import (
     compare_field,
     find_best_party_match,
     format_comparison_cell,
+    format_similarity_basis,
     get_accuracy_color,
     smart_reconstruct_and_match,
 )
@@ -974,8 +975,8 @@ def generate_executive_summary(
                                     # Use constrained size to prevent huge images and blank pages
                                     # Note: Path is not cleaned with clean_text_for_xelatex because file paths
                                     # in \includegraphics should be literal, not escaped
-                                    # Use width constraint with max dimension to prevent blank pages from oversized images
-                                    latex.append(f"\\includegraphics[width=0.75\\textwidth,max height=4cm,keepaspectratio]{{{rel_image_path}}}")
+                                    # Use full text width (less margins) to fill page width
+                                    latex.append(f"\\includegraphics[width=\\textwidth,keepaspectratio]{{{rel_image_path}}}")
                                     
                                     latex.append(r"\end{center}")
                                     latex.append(r"\vspace{0.2cm}")
@@ -1732,7 +1733,7 @@ def _generate_pleadings_and_postea_blocks(
                     [
                         f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
                         f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
-                        f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\%}}",
+                        f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\% (Embedding)}}",
                     ]
                 )
             elif item["type"] == "unmatched_gt":
@@ -1769,7 +1770,7 @@ def _generate_pleadings_and_postea_blocks(
                     [
                         f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
                         f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
-                        f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\%}}",
+                        f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\% (Embedding)}}",
                     ]
                 )
             elif item["type"] == "unmatched_gt":
@@ -2349,13 +2350,16 @@ def generate_field_level_report(metrics: ValidationMetrics) -> List[str]:
                 mismatch_note = r" \tiny{(schema?)}"
             else:
                 mismatch_note = r" \tiny{(OCR?)}"
+        
+        # Format similarity basis
+        basis_display = format_similarity_basis(comparison.similarity_basis)
 
         latex.append(
             f"{clean_text_for_xelatex(field_display)} & "
             f"{clean_text_for_xelatex(gt_display)} & "
             f"{clean_text_for_xelatex(ai_display)} & "
             f"{match_icon} & "
-            f"\\textcolor{{{sim_color}}}{{{similarity_pct}}}\\%{mismatch_note} \\\\ \\hline"
+            f"\\textcolor{{{sim_color}}}{{{similarity_pct}}}\\% \\tiny{{({basis_display})}}{mismatch_note} \\\\ \\hline"
         )
 
     latex.extend([r"\end{longtable}", r"\normalsize"])
