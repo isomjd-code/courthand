@@ -74,27 +74,66 @@ bash setup.sh
 ```
 
 This will create:
-- `venv_main/` - Main workflow environment (requires `requirements.txt`)
+- `venv/` - Main workflow environment (install dependencies manually)
 - `venv_kraken/` - Kraken HTR environment  
 - `venv_pylaia/` - PyLaia HTR environment
 
-**Note**: The setup script expects a `requirements.txt` file for the main environment. If this file doesn't exist, you'll need to create it with the main project dependencies, or install them manually after creating the virtual environment.
+**Note**: The main environment dependencies should be installed manually. Install required packages such as `google-generativeai`, `python-dotenv`, and other core dependencies. See the individual requirements files for each environment.
 
-### 3. Configure Settings
+### 3. Configure API Keys
+
+**Important**: The system requires a paid Google Gemini API key for Gemini 3 Flash Preview access.
+
+#### Option A: Using .env file (Recommended)
+
+Create a `.env` file in the project root:
+
+```bash
+# Create .env file
+cat > .env << 'EOF'
+GEMINI_API_KEY=your_actual_api_key_here
+EOF
+```
+
+Install `python-dotenv` to enable automatic loading:
+
+```bash
+pip install python-dotenv
+```
+
+The `workflow_manager/settings.py` file automatically loads `.env` files if `python-dotenv` is installed.
+
+#### Option B: Environment Variable
+
+Set the environment variable directly:
+
+```bash
+# In WSL/Linux/Mac
+export GEMINI_API_KEY=your_actual_api_key_here
+
+# Or add to ~/.bashrc for persistence
+echo 'export GEMINI_API_KEY=your_actual_api_key_here' >> ~/.bashrc
+source ~/.bashrc
+```
+
+See `API_KEYS_SETUP.md` for detailed setup instructions and security best practices.
+
+### 4. Configure Settings
 
 Edit `workflow_manager/settings.py` to configure:
 
-- **API Keys**: Set `GEMINI_API_KEY` environment variable with a paid API key for Gemini 3 Flash Preview access (recommended). Alternatively, you can set it directly in `settings.py`, but using an environment variable is more secure.
 - **Environment Paths**: Update `PYLAIA_ENV` and `KRAKEN_ENV` to match your virtual environment locations (default paths are in `~/.projects/`)
-- **Model Paths**: Ensure model files are in the `model_v10/` directory:
-  - `epoch=322-lowest_va_cer.ckpt` (PyLaia checkpoint, CER 25.9%)
-  - `syms.txt` (PyLaia symbols file)
-  - `model` (PyLaia architecture file)
+- **Model Paths**: The system uses models from `workflow_active_model/` directory (active model) or `model_v10/` (fallback):
+  - `workflow_active_model/` - Active model directory (updated by bootstrap training)
+  - `model_v10/` - Fallback model directory with:
+    - `epoch=322-lowest_va_cer.ckpt` (PyLaia checkpoint, CER 25.9%)
+    - `syms.txt` (PyLaia symbols file)
+    - `model` (PyLaia architecture file)
 - **Database Paths**: Verify paths to:
   - `cp40_database_new.sqlite` (surname database)
   - `places_data.db` (places database)
 
-### 4. Install HTR Tools
+### 5. Install HTR Tools
 
 Install Kraken and PyLaia in their respective environments:
 
@@ -268,26 +307,34 @@ latin_bho/
 │   └── text_utils.py          # Text formatting utilities
 ├── line_preprocessor/         # Line preprocessing utilities
 │   ├── processing.py          # Line extraction and processing
-│   └── geometry.py            # Geometric transformations
+│   ├── geometry.py            # Geometric transformations
+│   ├── parser.py              # Configuration parsing
+│   ├── runner.py              # Preprocessing runner
+│   └── config.py              # Preprocessing configuration (dimensions, binarization, etc.)
 ├── line_preprocessor_greyscale/  # Greyscale line preprocessing
+│   ├── processing.py          # Greyscale processing
+│   ├── runner.py              # Greyscale runner
+│   └── config.py              # Greyscale configuration
 ├── pylaia_dataset/            # PyLaia dataset generation
 │   └── generator.py           # Dataset creation from HTR results
 ├── input_images/              # Input manuscript images
 ├── cp40_processing/           # Processing workspace
 │   └── output/                # Generated outputs
 ├── bootstrap_training_data/   # Bootstrap training data artifacts
-├── model_v10/                 # HTR model files (current version)
+├── model_v10/                 # HTR model files (fallback version)
+├── workflow_active_model/     # Active HTR model directory (updated by bootstrap training)
 ├── webviewer/                 # Web viewer files
 ├── logs/                      # Application logs
 ├── cp40_database_new.sqlite   # Surname reference database
 ├── places_data.db             # Places reference database
 ├── cp40_surname_scraper_simple.py  # CP40 surname web scraper
 ├── cp40_full_scraper.py       # Full CP40 scraper
-├── requirements.txt           # Main project dependencies
 ├── requirements_kraken.txt    # Kraken dependencies
 ├── requirements_pylaia.txt    # PyLaia dependencies
 ├── requirements_scraper.txt   # Scraper dependencies
-└── setup.sh                   # Setup script
+├── setup.sh                   # Setup script
+├── .env                       # API keys (not in git, see API_KEYS_SETUP.md)
+└── API_KEYS_SETUP.md          # API key setup guide
 ```
 
 ## Configuration
@@ -303,10 +350,13 @@ Set these in `workflow_manager/settings.py` or as environment variables:
 ### API Configuration
 
 The system uses Google Gemini 3 Flash Preview for all operations:
-- Requires a paid API key (set via `GEMINI_API_KEY` environment variable)
+- **Requires a paid API key** (set via `GEMINI_API_KEY` environment variable or `.env` file)
 - Uses non-batch mode for all API calls
-- Includes automatic retry logic with exponential backoff for timeout/504 errors
-- File uploads are cached to avoid re-uploading the same images
+- **Automatic retry logic**: Exponential backoff for timeout/504 errors (up to 5 retries)
+- **API Timeout**: 30 minutes (1,800,000 ms) for API calls and file uploads
+- **File upload caching**: Uploaded files are cached to avoid re-uploading the same images
+- **Cost**: $0.25 per million input tokens, $1.50 per million output tokens
+- **Environment variable loading**: Automatically loads `.env` file if `python-dotenv` is installed
 
 ### Directory Paths
 
@@ -316,6 +366,23 @@ Default paths (configurable in `settings.py`):
 - `IMAGE_DIR`: `input_images/`
 - `OUTPUT_DIR`: `cp40_processing/output/`
 - `LOG_DIR`: `logs/`
+- `MODEL_DIR`: `model_v10/` (fallback)
+- `ACTIVE_MODEL_DIR`: `workflow_active_model/` (active model used by workflow)
+- `SURNAME_DB_PATH`: `cp40_database_new.sqlite`
+- `PLACE_DB_PATH`: `places_data.db`
+
+### Line Preprocessing Configuration
+
+Line preprocessing parameters are configured in `line_preprocessor/config.py`:
+
+- **Image Dimensions**: Minimum line size (8x8), target height (128px), max width (6000px)
+- **Binarization**: Sauvola algorithm with configurable window size and sensitivity
+- **Deslanting**: Angle range for text deslanting correction
+- **Morphological Operations**: Dilation kernel size and iterations for text thickening
+- **Baseline Positioning**: Target Y position for baseline in normalized images
+- **Bounding Box Extension**: Left extension for additional context (150px default)
+
+See `line_preprocessor/config.py` for all configurable parameters.
 
 ## Output Format
 
@@ -371,11 +438,36 @@ Reports include:
 
 ### Common Issues
 
-1. **API Key Errors**: Ensure `GEMINI_API_KEY` environment variable is set with a paid API key
-2. **HTR Failures**: Verify Kraken and PyLaia environments are activated correctly
-3. **GPU Issues**: Check CUDA installation if HTR models fail to load
-4. **Database Errors**: Ensure SQLite database files exist at configured paths
-5. **Path Issues**: Verify all directory paths in `settings.py` are correct
+1. **API Key Errors**: 
+   - Ensure `GEMINI_API_KEY` environment variable is set with a paid API key
+   - Check that `.env` file exists and contains the key (if using python-dotenv)
+   - Verify the key is a paid key (required for Gemini 3 Flash Preview)
+   - See `API_KEYS_SETUP.md` for detailed troubleshooting
+
+2. **HTR Failures**: 
+   - Verify Kraken and PyLaia environments are activated correctly
+   - Check that virtual environment paths in `settings.py` match your setup
+   - Ensure model files exist in `workflow_active_model/` or `model_v10/`
+
+3. **GPU Issues**: 
+   - Check CUDA installation if HTR models fail to load
+   - Verify GPU drivers are up to date
+   - Models can run on CPU but will be slower
+
+4. **Database Errors**: 
+   - Ensure SQLite database files exist at configured paths
+   - Verify `cp40_database_new.sqlite` and `places_data.db` are in the project root
+   - Check file permissions if database access fails
+
+5. **Path Issues**: 
+   - Verify all directory paths in `settings.py` are correct
+   - Ensure `input_images/` directory exists
+   - Check that `cp40_processing/output/` is writable
+
+6. **API Timeout Errors**:
+   - The system automatically retries up to 5 times with exponential backoff
+   - Timeout is set to 30 minutes for large file uploads
+   - Check network connectivity if timeouts persist
 
 ### Logs
 
@@ -390,27 +482,51 @@ Check log files for detailed processing information:
 
 ## Recent Improvements
 
+### Core System Updates
 - **Gemini 3 Flash Preview**: Upgraded to Gemini 3 Flash Preview for all vision and text tasks
 - **Bayesian Correction**: Implemented Bayesian named entity correction using reference databases
 - **7-Step Pipeline**: Expanded workflow to include post-correction, stitching, expansion, translation, and indexing
+- **Environment Variable Support**: Added `.env` file support with automatic loading via `python-dotenv`
+- **Active Model Directory**: Introduced `workflow_active_model/` for bootstrap-trained models
+- **Retry Logic**: Automatic retry with exponential backoff (up to 5 retries) for API timeouts and 504 errors
+- **Extended API Timeout**: Increased to 30 minutes for large file uploads and processing
+
+### Extraction Accuracy Improvements
+- **Legal Taxonomy Alignment**: Enhanced case type classification (distinguishes WritType vs CaseType, sub-categories like "Assault" vs "Housebreaking")
+- **Paleographic Character Disambiguation**: Capital letter correction instructions for Court Hand script (C vs R/G, G vs C, K vs H)
+- **Historical Place Name Normalization**: Gazetteer-style mapping instructions for medieval place names
+- **Currency Unit Distinction**: Improved extraction of Marks vs. Shillings vs. Pounds
+- **Regnal Year Date Conversion**: Enhanced feast day calculations for date conversion
+- **Document Segmentation**: Improved Postea extraction and case boundary detection
+- **County Identification**: Enhanced margin vs. text prioritization for county extraction
+- **Role Inference**: Attorney relationship extraction improvements
+- **Thinking Level**: Increased from LOW to MEDIUM for Step 4 indexing
+
+### Validation & Reporting
 - **Validation Reports**: Enhanced PDF reports with field-specific similarity thresholds and visual verification
 - **Optimal Matching**: Uses Hungarian algorithm for optimal agent/event assignment
 - **AI Certainty**: Confidence level reporting (High, Medium, Low, Very Low) for extracted names
 - **Line Image Processing**: Integrated line image extraction and processing for visual verification
 - **Exact Database Matching**: Improved ground truth extraction with exact SQL matching
 - **Semantic Matching**: Enhanced person matching with weighted semantic similarity and Levenshtein fallback
-- **Retry Logic**: Automatic retry with exponential backoff for API timeouts and 504 errors
+
+### Training & Infrastructure
 - **Bootstrap Training**: Added automated training workflow using Gemini-corrected transcriptions
 - **Code Cleanup**: Removed 30 obsolete files including test scripts, debug tools, and duplicate functionality (see `CODE_REVIEW_REPORT.md` and `CLEANUP_SUMMARY.md`)
 
+See `WORKFLOW_IMPROVEMENTS_DIFF.md` for detailed documentation of all 8 extraction accuracy improvements.
+
 ## Additional Documentation
 
+- **`API_KEYS_SETUP.md`**: Comprehensive guide for setting up API keys securely
 - **`CODE_REVIEW_REPORT.md`**: Comprehensive code review identifying unused and obsolete code
 - **`CLEANUP_SUMMARY.md`**: Summary of cleanup operations removing 30 obsolete files
 - **`CP40_SCRAPER_README.md`**: Documentation for the CP40 surname web scraper
 - **`bootstrap_training/README.md`**: Detailed documentation for the bootstrap training workflow
+- **`WORKFLOW_IMPROVEMENTS_DIFF.md`**: Detailed documentation of all 8 extraction accuracy improvements
 - **`model_architecture.md`**: Information about the HTR model architecture
 - **`database_schema_documentation.md`**: Database schema documentation
+- **`REGENERATE_AND_TRAIN.md`**: Guide for regenerating datasets and retraining models
 
 ## Contributing
 

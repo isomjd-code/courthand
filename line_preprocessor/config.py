@@ -48,7 +48,7 @@ MORPH_DILATION_KERNEL = (2, 2)
 MORPH_DILATION_ITERATIONS = 1
 """How many times to apply the thickening effect."""
 
-BBOX_LEFT_EXTENSION = 200
+BBOX_LEFT_EXTENSION = 150
 """Number of pixels to extend bounding boxes and baselines to the left for line image extraction.
 This makes PyLaia operate on a longer line image with additional context on the left side."""
 
