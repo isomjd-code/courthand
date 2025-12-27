@@ -34,7 +34,7 @@
             overflow: hidden; 
         }
 
-        /* --- File Picker --- */
+        /* --- Case Selector --- */
         #filePickerScreen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: white; z-index: 1000;
@@ -44,11 +44,13 @@
             border: 3px dashed #ccc; padding: 40px; border-radius: 10px;
             background: #fafafa; max-width: 500px; text-align: center;
         }
-        .btn-upload {
-            background-color: var(--accent); color: white; padding: 12px 24px;
-            border-radius: 5px; cursor: pointer; font-size: 1.1rem; margin-top: 15px; display: inline-block;
+        #caseSelect {
+            cursor: pointer;
         }
-        input[type="file"] { display: none; }
+        #caseSelect:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
 
         /* --- Main Layout --- */
         #appContainer { display: none; flex-direction: column; height: 100%; }
@@ -57,6 +59,23 @@
             background-color: var(--primary); color: white; padding: 10px 20px;
             display: flex; justify-content: space-between; align-items: center;
             box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 10;
+        }
+        .header-left {
+            display: flex; align-items: center; gap: 15px; flex: 1;
+        }
+        .case-selector-header {
+            padding: 6px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.3);
+            background-color: rgba(255,255,255,0.1); color: white; font-size: 0.9rem;
+            cursor: pointer; min-width: 250px; max-width: 400px;
+        }
+        .case-selector-header:hover {
+            background-color: rgba(255,255,255,0.2);
+        }
+        .case-selector-header:focus {
+            outline: none; border-color: rgba(255,255,255,0.5);
+        }
+        .case-selector-header option {
+            background-color: var(--primary); color: white;
         }
         .btn-save {
             background-color: var(--save-btn); color: white; border: none;
@@ -124,6 +143,21 @@
         
         .line-id-meta { font-size: 0.7rem; color: #999; cursor: pointer; margin-bottom: 2px; }
         .htr-hint { font-size: 0.75rem; color: #777; font-family: monospace; margin-bottom: 4px; font-style: italic; }
+        
+        /* Name confidence highlighting */
+        .name-highlight {
+            padding: 2px 0;
+            border-radius: 2px;
+            font-weight: 600;
+        }
+        .name-high { background-color: transparent; color: inherit; }
+        .name-medium { background-color: #fff3cd; color: #856404; }
+        .name-low { background-color: #f8d7da; color: #721c24; }
+        .diplomatic-preview {
+            font-size: 0.9rem; color: #666; margin-bottom: 4px; 
+            padding: 4px; background: #f8f9fa; border-radius: 3px;
+            line-height: 1.4;
+        }
 
         /* Inputs */
         textarea.editable-text {
@@ -165,20 +199,65 @@
         .event-type { font-weight: bold; color: var(--primary); text-transform: capitalize; }
         .event-meta { font-size: 0.85rem; color: #666; margin-top: 4px; }
 
+        /* Field Comparison Table */
+        .comparison-table {
+            width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 10px;
+        }
+        .comparison-table th {
+            background-color: var(--primary); color: white; padding: 8px; text-align: left;
+            font-weight: 600; position: sticky; top: 0; z-index: 10;
+        }
+        .comparison-table td {
+            padding: 8px; border-bottom: 1px solid #eee; vertical-align: top;
+        }
+        .comparison-table tr:hover {
+            background-color: #f8f9fa;
+        }
+        .comparison-table tr.match-row {
+            background-color: #d4edda;
+        }
+        .comparison-table tr.mismatch-row {
+            background-color: #f8d7da;
+        }
+        .match-indicator {
+            font-weight: bold; font-size: 1.2em;
+        }
+        .match-indicator.match { color: #28a745; }
+        .match-indicator.mismatch { color: #dc3545; }
+        .similarity-score {
+            font-weight: 600;
+        }
+        .similarity-score.high { color: #28a745; }
+        .similarity-score.medium { color: #ffc107; }
+        .similarity-score.low { color: #dc3545; }
+        .basis-badge {
+            display: inline-block; padding: 2px 6px; border-radius: 3px;
+            background-color: #e9ecef; font-size: 0.75rem; margin-left: 5px;
+        }
+        .info-box {
+            background-color: #e7f3ff; border-left: 4px solid var(--accent);
+            padding: 15px; margin-bottom: 20px; border-radius: 4px;
+        }
+        .info-box h4 {
+            margin-top: 0; color: var(--primary);
+        }
+        .info-box ul {
+            margin: 10px 0; padding-left: 20px;
+        }
+
         @media (max-width: 800px) { .main-layout { flex-direction: column; } }
     </style>
 </head>
 <body>
 
-    <!-- File Picker -->
+    <!-- Case Selector -->
     <div id="filePickerScreen">
         <div class="upload-box">
-            <h2>Load Case Files</h2>
-            <p>Select <strong>master_record.json</strong> and images.</p>
-            <label class="btn-upload">
-                Select Files
-                <input type="file" id="fileInput" multiple accept=".json, .jpg, .jpeg, .png">
-            </label>
+            <h2>Select Case</h2>
+            <p>Choose a case from the dropdown to load.</p>
+            <select id="caseSelect" style="width:100%; padding:12px; font-size:1rem; margin-top:15px; border:2px solid #ccc; border-radius:5px;">
+                <option value="">Loading cases...</option>
+            </select>
             <div id="fileList" style="margin-top:15px; color:#666;"></div>
         </div>
     </div>
@@ -186,9 +265,14 @@
     <!-- App UI -->
     <div id="appContainer">
         <header>
-            <div>
-                <div style="font-weight:bold; font-size:1.1rem;">Plea Roll Editor</div>
-                <div style="font-size: 0.8rem; opacity:0.8;" id="caseIdDisplay"></div>
+            <div class="header-left">
+                <div>
+                    <div style="font-weight:bold; font-size:1.1rem;">Plea Roll Editor</div>
+                    <div style="font-size: 0.8rem; opacity:0.8;" id="caseIdDisplay"></div>
+                </div>
+                <select id="caseSelectorHeader" class="case-selector-header" style="display:none;">
+                    <option value="">Switch case...</option>
+                </select>
             </div>
             <button class="btn-save" onclick="downloadJSON()">&#128190; Download JSON</button>
         </header>
@@ -209,6 +293,7 @@
                     <button class="tab active" onclick="switchTab('transcription')">Lines</button>
                     <button class="tab" onclick="switchTab('details')">Legal Index</button>
                     <button class="tab" onclick="switchTab('fulltext')">Text Content</button>
+                    <button class="tab" onclick="switchTab('fieldComparison')">Field Comparison</button>
                 </div>
 
                 <div id="transcription" class="tab-content active">
@@ -222,6 +307,10 @@
                 <div id="fulltext" class="tab-content">
                     <div class="content-pad" id="fullTextContent">Loading...</div>
                 </div>
+
+                <div id="fieldComparison" class="tab-content">
+                    <div class="content-pad" id="fieldComparisonContent">Loading...</div>
+                </div>
             </div>
         </div>
     </div>
@@ -231,36 +320,199 @@
     let imageBlobs = {}; 
     let currentImageName = "";
     let originalJsonName = "master_record.json";
+    let currentCaseId = "";
+    let availableCases = [];
     let zoomState = { scale: 1, pX: 0, pY: 0, isDragging: false, startX: 0, startY: 0 };
+    const API_BASE = window.location.origin;
 
-    // --- 1. File Handling ---
-    document.getElementById('fileInput').addEventListener('change', (e) => {
-        const files = Array.from(e.target.files);
-        let jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json'));
-        const imgFiles = files.filter(f => f.type.startsWith('image/'));
-
-        if (!jsonFile) return alert("Please include the .json file.");
+    // --- 1. Case Loading ---
+    function populateCaseSelectors(cases) {
+        availableCases = cases;
         
-        originalJsonName = jsonFile.name;
-        document.getElementById('fileList').textContent = `Loaded: ${jsonFile.name} and ${imgFiles.length} images.`;
+        // Populate initial selector
+        const select = document.getElementById('caseSelect');
+        select.innerHTML = '<option value="">-- Select a case --</option>';
+        
+        // Populate header selector
+        const headerSelect = document.getElementById('caseSelectorHeader');
+        headerSelect.innerHTML = '<option value="">Switch case...</option>';
+        
+        cases.forEach(caseInfo => {
+            const label = caseInfo.group_id || caseInfo.id;
+            const extra = [];
+            if (caseInfo.county) extra.push(caseInfo.county);
+            if (caseInfo.roll_number) extra.push(`Roll ${caseInfo.roll_number}`);
+            const displayText = label + (extra.length ? ` (${extra.join(', ')})` : '');
+            
+            // Add to initial selector
+            const option = document.createElement('option');
+            option.value = caseInfo.id;
+            option.textContent = displayText;
+            select.appendChild(option);
+            
+            // Add to header selector
+            const headerOption = document.createElement('option');
+            headerOption.value = caseInfo.id;
+            headerOption.textContent = displayText;
+            headerSelect.appendChild(headerOption);
+        });
+    }
+    
+    async function loadAvailableCases() {
+        try {
+            const response = await fetch(`${API_BASE}/api/cases`);
+            if (!response.ok) throw new Error("Failed to load cases");
+            const cases = await response.json();
+            
+            populateCaseSelectors(cases);
+            
+            // Set up initial selector
+            const select = document.getElementById('caseSelect');
+            select.addEventListener('change', (e) => {
+                if (e.target.value) {
+                    loadCase(e.target.value);
+                }
+            });
+            
+            // Set up header selector
+            const headerSelect = document.getElementById('caseSelectorHeader');
+            headerSelect.addEventListener('change', (e) => {
+                if (e.target.value) {
+                    switchCase(e.target.value);
+                } else {
+                    e.target.value = currentCaseId; // Reset to current case
+                }
+            });
+        } catch (err) {
+            console.error("Error loading cases:", err);
+            document.getElementById('fileList').textContent = `Error: ${err.message}. Make sure the server is running.`;
+        }
+    }
+    
+    function switchCase(newCaseId) {
+        if (newCaseId === currentCaseId) return;
+        
+        // Show loading state
+        document.getElementById('caseIdDisplay').textContent = "Loading...";
+        document.getElementById('linesList').innerHTML = '<div style="padding:20px; text-align:center; color:#666;">Loading case...</div>';
+        
+        // Reset state
+        resetViewerState();
+        
+        // Load new case
+        loadCase(newCaseId);
+    }
+    
+    function resetViewerState() {
+        // Clear current data
+        appData = null;
+        imageBlobs = {};
+        currentImageName = "";
+        confidenceMap = {}; // Clear confidence map
+        
+        // Reset zoom
+        zoomState = { scale: 1, pX: 20, pY: 20, isDragging: false, startX: 0, startY: 0 };
+        updateTransform();
+        
+        // Reset to first tab
+        switchTab('transcription');
+        
+        // Clear UI
+        document.getElementById('imgToolbar').innerHTML = '';
+        document.getElementById('overlayContainer').innerHTML = '';
+        document.getElementById('linesList').innerHTML = 'Select an image to view lines.';
+        document.getElementById('detailsContent').innerHTML = 'Loading...';
+        document.getElementById('fullTextContent').innerHTML = 'Loading...';
+        document.getElementById('fieldComparisonContent').innerHTML = 'Loading...';
+        document.getElementById('caseIdDisplay').textContent = '';
+        
+        const imgEl = document.getElementById('docImage');
+        imgEl.src = '';
+    }
 
-        imgFiles.forEach(f => { imageBlobs[f.name] = URL.createObjectURL(f); });
+    async function findImageFile(filename) {
+        // Try exact match first
+        let imgUrl = `${API_BASE}/api/image/${encodeURIComponent(filename)}`;
+        let response = await fetch(imgUrl, { method: 'HEAD' });
+        if (response.ok) return imgUrl;
+        
+        // Try case-insensitive match by getting list of available images
+        // For now, just try common variations
+        const baseName = filename.replace(/\.[^.]*$/, '');
+        const ext = filename.match(/\.[^.]*$/)?.[0] || '.jpg';
+        
+        // Try variations: with/without spaces, different case
+        const variations = [
+            filename,
+            filename.toLowerCase(),
+            filename.toUpperCase(),
+            baseName + ext.toLowerCase(),
+            baseName + ext.toUpperCase(),
+            baseName.replace(/ /g, '-') + ext,
+            baseName.replace(/ /g, '_') + ext,
+        ];
+        
+        for (const variant of variations) {
+            imgUrl = `${API_BASE}/api/image/${encodeURIComponent(variant)}`;
+            response = await fetch(imgUrl, { method: 'HEAD' });
+            if (response.ok) return imgUrl;
+        }
+        
+        return null;
+    }
 
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            try {
-                appData = JSON.parse(evt.target.result);
-                console.log("JSON Loaded", appData); // Debug log
-                initApp();
-            } catch (err) { alert("JSON Error: " + err.message); }
-        };
-        reader.readAsText(jsonFile);
-    });
+    async function loadCase(caseId) {
+        try {
+            document.getElementById('fileList').textContent = "Loading case...";
+            currentCaseId = caseId;
+            
+            // Load master_record.json
+            const response = await fetch(`${API_BASE}/api/case?id=${encodeURIComponent(caseId)}`);
+            if (!response.ok) throw new Error("Failed to load case data");
+            appData = await response.json();
+            
+            originalJsonName = "master_record.json";
+            console.log("JSON Loaded", appData);
+            
+            // Load images
+            const images = (appData.source_material || []).map(p => p.filename).filter(Boolean);
+            imageBlobs = {};
+            let loadedCount = 0;
+            
+            for (const imgName of images) {
+                const imgUrl = await findImageFile(imgName);
+                if (imgUrl) {
+                    imageBlobs[imgName] = imgUrl;
+                    loadedCount++;
+                } else {
+                    console.warn(`Image not found: ${imgName}`);
+                }
+            }
+            
+            document.getElementById('fileList').textContent = `Loaded: ${loadedCount}/${images.length} images.`;
+            if (loadedCount === 0) {
+                document.getElementById('fileList').textContent += " Warning: No images found!";
+            }
+            initApp();
+        } catch (err) {
+            alert("Error loading case: " + err.message);
+            console.error(err);
+        }
+    }
+
+    // Load cases on page load
+    loadAvailableCases();
 
     // --- 2. Init ---
     function initApp() {
         document.getElementById('filePickerScreen').style.display = 'none';
         document.getElementById('appContainer').style.display = 'flex';
+        
+        // Show header case selector
+        const headerSelect = document.getElementById('caseSelectorHeader');
+        headerSelect.style.display = 'block';
+        headerSelect.value = currentCaseId;
+        
         document.getElementById('caseIdDisplay').textContent = appData.case_metadata?.group_id || "No ID";
 
         setupZoomPan();
@@ -285,7 +537,123 @@
         }
 
         renderFullTextAndDetails();
+        renderFieldComparison();
+        buildConfidenceMap();
         if(images.length > 0) loadImage(images[0]);
+    }
+    
+    // Build confidence map for name highlighting
+    let confidenceMap = {}; // word -> probability (0.0-1.0)
+    
+    function buildConfidenceMap() {
+        confidenceMap = {};
+        
+        // Extract from extracted_entities (surnames, place_names)
+        if (appData.extracted_entities) {
+            for (const nameType of ["surnames", "place_names"]) {
+                const entities = appData.extracted_entities[nameType] || [];
+                for (const entity of entities) {
+                    const term = (entity.term || "").toLowerCase().trim();
+                    let probability = entity.probability;
+                    if (probability === null || probability === undefined) {
+                        probability = 1.0; // Default to high confidence
+                    }
+                    if (term) {
+                        confidenceMap[term] = probability;
+                    }
+                    // For place names, also check anglicized form
+                    if (nameType === "place_names" && entity.anglicized) {
+                        const anglicized = (entity.anglicized || "").toLowerCase().trim();
+                        if (anglicized) {
+                            confidenceMap[anglicized] = probability;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Extract from source_material lines (forenames, surnames with best_candidate)
+        if (appData.source_material) {
+            for (const source of appData.source_material) {
+                if (!source.lines) continue;
+                for (const line of source.lines) {
+                    // Check forenames
+                    if (line.forenames) {
+                        for (const fn of line.forenames) {
+                            const bestCandidate = fn.best_candidate;
+                            if (bestCandidate) {
+                                let prob = bestCandidate.probability;
+                                if (prob === null || prob === undefined) {
+                                    prob = 1.0;
+                                }
+                                const name = (bestCandidate.text || "").toLowerCase().trim();
+                                if (name) {
+                                    // Keep lowest probability if name appears multiple times
+                                    if (!confidenceMap[name] || confidenceMap[name] > prob) {
+                                        confidenceMap[name] = prob;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Check surnames
+                    if (line.surnames) {
+                        for (const sn of line.surnames) {
+                            const bestCandidate = sn.best_candidate;
+                            if (bestCandidate) {
+                                let prob = bestCandidate.probability;
+                                if (prob === null || prob === undefined) {
+                                    prob = 1.0;
+                                }
+                                const name = (bestCandidate.text || "").toLowerCase().trim();
+                                if (name) {
+                                    // Keep lowest probability if name appears multiple times
+                                    if (!confidenceMap[name] || confidenceMap[name] > prob) {
+                                        confidenceMap[name] = prob;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    function highlightNamesInText(text) {
+        if (!text) return "";
+        
+        // Split text into words while preserving whitespace
+        const words = text.split(/(\s+)/);
+        const highlighted = [];
+        
+        for (const word of words) {
+            if (!word.trim()) {
+                // Preserve whitespace
+                highlighted.push(word);
+                continue;
+            }
+            
+            // Remove punctuation for matching
+            const wordClean = word.toLowerCase().replace(/[.,;:!?()\[\]{}'"]/g, '');
+            const confidence = confidenceMap[wordClean];
+            
+            if (confidence !== undefined) {
+                let className = 'name-high';
+                if (confidence < 0.5) {
+                    className = 'name-low';
+                } else if (confidence < 0.9) {
+                    className = 'name-medium';
+                }
+                
+                // Preserve original word with punctuation
+                highlighted.push(`<span class="name-highlight ${className}">${escapeHtml(word)}</span>`);
+            } else {
+                highlighted.push(escapeHtml(word));
+            }
+        }
+        
+        return highlighted.join('');
     }
 
     // --- 3. Zoom Logic ---
@@ -337,9 +705,20 @@
         
         let url = imageBlobs[name];
         if (!url) {
-            const key = Object.keys(imageBlobs).find(k => k.includes(name));
+            // Try to find a matching image (fuzzy match)
+            const key = Object.keys(imageBlobs).find(k => {
+                const kNorm = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const nNorm = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+                return kNorm === nNorm || k.includes(name) || name.includes(k);
+            });
             if(key) url = imageBlobs[key];
         }
+        
+        // If still no URL, try to construct it from the API
+        if (!url) {
+            url = `${API_BASE}/api/image/${encodeURIComponent(name)}`;
+        }
+        
         imgEl.src = url || "";
         renderLineList(name);
     }
@@ -404,9 +783,21 @@
             hint.className = 'htr-hint';
             hint.textContent = line.text_htr || "(No HTR)";
 
+            // Create highlighted preview of diplomatic text
+            const preview = document.createElement('div');
+            preview.className = 'diplomatic-preview';
+            const diplomaticText = line.text_diplomatic || "";
+            preview.innerHTML = highlightNamesInText(diplomaticText) || "<em>No diplomatic text</em>";
+            
             const input = document.createElement('textarea');
             input.className = 'editable-text';
-            input.value = line.text_diplomatic || "";
+            input.value = diplomaticText;
+            
+            // Update preview when input changes
+            input.addEventListener('input', (e) => {
+                line.text_diplomatic = e.target.value;
+                preview.innerHTML = highlightNamesInText(e.target.value) || "<em>No diplomatic text</em>";
+            });
             
             let orig = "";
             input.onfocus = (e) => { 
@@ -416,11 +807,14 @@
             };
             input.onblur = (e) => {
                 div.classList.remove('active');
-                if(e.target.value !== orig) { line.text_diplomatic = e.target.value; logChange('line_text', orig, e.target.value); }
+                if(e.target.value !== orig) { 
+                    line.text_diplomatic = e.target.value; 
+                    logChange('line_text', orig, e.target.value);
+                    preview.innerHTML = highlightNamesInText(e.target.value) || "<em>No diplomatic text</em>";
+                }
             };
-            input.oninput = (e) => line.text_diplomatic = e.target.value;
 
-            div.append(meta, hint, input);
+            div.append(meta, hint, preview, input);
             container.appendChild(div);
         });
     }
@@ -643,37 +1037,7 @@
             });
         }
 
-        // Validation Issues
-        if(appData.validation && appData.validation.validation_issues) {
-            const valDiv = document.createElement('div');
-            valDiv.innerHTML = `<div class="section-header">Validation Issues <span style="font-size:0.7em;color:#999;font-weight:normal;">(${appData.validation.validation_issues.length} issues`;
-            if(appData.validation.critical_count !== undefined) {
-                valDiv.innerHTML += `, ${appData.validation.critical_count} critical`;
-            }
-            valDiv.innerHTML += `)</span></div>`;
-            
-            appData.validation.validation_issues.forEach(issue => {
-                const card = document.createElement('div');
-                card.className = 'event-card';
-                const severityColor = issue.severity === 'critical' ? '#e74c3c' : 
-                                      issue.severity === 'high' ? '#f39c12' : 
-                                      issue.severity === 'medium' ? '#f1c40f' : '#95a5a6';
-                card.style.borderLeftColor = severityColor;
-                
-                const title = document.createElement('div');
-                title.className = 'event-type';
-                title.style.color = severityColor;
-                title.textContent = `[${issue.severity.toUpperCase()}] ${issue.type || 'Issue'}`;
-                
-                const meta = document.createElement('div');
-                meta.className = 'event-meta';
-                meta.textContent = issue.message || '';
-                
-                card.append(title, meta);
-                valDiv.appendChild(card);
-            });
-            det.appendChild(valDiv);
-        }
+        // Field comparison will be rendered in the fieldComparison tab
 
         // Token Usage (read-only informational)
         if(appData.token_usage) {
@@ -740,6 +1104,169 @@
             costDiv.appendChild(tCost);
             det.appendChild(costDiv);
         }
+    }
+
+    // --- 5b. Field Comparison ---
+    function renderFieldComparison() {
+        const container = document.getElementById('fieldComparisonContent');
+        container.innerHTML = '';
+        
+        // Check if validation_report with metrics exists
+        const validationReport = appData.validation_report;
+        const metrics = validationReport?.metrics;
+        const comparisons = metrics?.field_comparisons || [];
+        
+        if (!comparisons || comparisons.length === 0) {
+            container.innerHTML = `
+                <div class="info-box">
+                    <h4>No Field Comparison Data Available</h4>
+                    <p>Field comparison data is generated when a validation report is created. 
+                    This data compares ground truth values from the database with AI extraction results.</p>
+                    <p>If you expect to see comparison data, ensure that:</p>
+                    <ul>
+                        <li>A validation report has been generated for this case</li>
+                        <li>The master_record.json includes a <code>validation_report.metrics.field_comparisons</code> section</li>
+                    </ul>
+                </div>
+            `;
+            return;
+        }
+        
+        // Info box with similarity thresholds
+        const infoBox = document.createElement('div');
+        infoBox.className = 'info-box';
+        infoBox.innerHTML = `
+            <h4>Similarity Thresholds</h4>
+            <p><strong>Match Criteria:</strong></p>
+            <ul>
+                <li><strong>Agent Name</strong> and <strong>Event Place</strong>: Similarity > 95% required for match</li>
+                <li><strong>Case Details</strong>: Similarity > 78% required for match</li>
+                <li><strong>All other fields</strong>: Similarity > 90% required for match</li>
+            </ul>
+            <p><strong>Mismatch Types:</strong></p>
+            <ul>
+                <li><strong>OCR Error</strong>: Text was read incorrectly (e.g., 'Thom'am' vs 'Thomas')</li>
+                <li><strong>Classification Error</strong>: Value not in AI's schema/ontology (e.g., 'Auditor' not recognized as valid role)</li>
+                <li><strong>Value not in schema</strong>: AI's training set didn't include this categorical value</li>
+            </ul>
+        `;
+        container.appendChild(infoBox);
+        
+        // Summary stats
+        const summary = metrics.summary || {};
+        if (summary.total_fields) {
+            const summaryDiv = document.createElement('div');
+            summaryDiv.style.marginBottom = '20px';
+            summaryDiv.innerHTML = `
+                <div class="section-header">Summary</div>
+                <table style="width:100%; border-collapse:collapse;">
+                    <tr><th style="text-align:left; padding:8px; background:#f8f9fa;">Total Fields</th><td style="padding:8px;">${summary.total_fields}</td></tr>
+                    <tr><th style="text-align:left; padding:8px; background:#f8f9fa;">Exact Matches</th><td style="padding:8px;">${summary.exact_matches || 0}</td></tr>
+                    <tr><th style="text-align:left; padding:8px; background:#f8f9fa;">Overall Accuracy</th><td style="padding:8px;">${((summary.overall_accuracy || 0) * 100).toFixed(1)}%</td></tr>
+                    <tr><th style="text-align:left; padding:8px; background:#f8f9fa;">Average Similarity</th><td style="padding:8px;">${((summary.avg_similarity || 0) * 100).toFixed(1)}%</td></tr>
+                </table>
+            `;
+            container.appendChild(summaryDiv);
+        }
+        
+        // Create comparison table
+        const table = document.createElement('table');
+        table.className = 'comparison-table';
+        
+        // Table header
+        const thead = document.createElement('thead');
+        thead.innerHTML = `
+            <tr>
+                <th>Field</th>
+                <th>Ground Truth</th>
+                <th>AI Extraction</th>
+                <th>Match</th>
+                <th>Similarity</th>
+            </tr>
+        `;
+        table.appendChild(thead);
+        
+        // Table body
+        const tbody = document.createElement('tbody');
+        
+        // Sort comparisons by category and field name
+        const sortedComparisons = [...comparisons].sort((a, b) => {
+            const catA = a.category || 'Uncategorized';
+            const catB = b.category || 'Uncategorized';
+            if (catA !== catB) return catA.localeCompare(catB);
+            return (a.field_name || '').localeCompare(b.field_name || '');
+        });
+        
+        let currentCategory = '';
+        sortedComparisons.forEach(comp => {
+            const category = comp.category || 'Uncategorized';
+            
+            // Add category header row if category changed
+            if (category !== currentCategory) {
+                const catRow = document.createElement('tr');
+                catRow.style.backgroundColor = '#e9ecef';
+                catRow.style.fontWeight = 'bold';
+                const catCell = document.createElement('td');
+                catCell.colSpan = 5;
+                catCell.textContent = category;
+                catCell.style.padding = '12px 8px';
+                catRow.appendChild(catCell);
+                tbody.appendChild(catRow);
+                currentCategory = category;
+            }
+            
+            const row = document.createElement('tr');
+            row.className = comp.is_match ? 'match-row' : 'mismatch-row';
+            
+            const similarityPct = Math.round((comp.similarity_score || 0) * 100);
+            const simClass = similarityPct >= 90 ? 'high' : similarityPct >= 70 ? 'medium' : 'low';
+            
+            // Format similarity basis
+            const basisMap = {
+                'embedding': 'Emb',
+                'soundex': 'Sdx',
+                'levenshtein': 'Lev',
+                'exact_match': 'Exact',
+                'special_rule': 'Rule',
+                'date_normalization': 'Date',
+                'unknown': '?'
+            };
+            const basisShort = basisMap[comp.similarity_basis] || comp.similarity_basis || '?';
+            
+            // Truncate long values for display
+            const gtDisplay = (comp.gt_value || '').length > 50 
+                ? (comp.gt_value || '').substring(0, 50) + '...' 
+                : (comp.gt_value || '-');
+            const aiDisplay = (comp.ai_value || '').length > 50 
+                ? (comp.ai_value || '').substring(0, 50) + '...' 
+                : (comp.ai_value || '-');
+            
+            row.innerHTML = `
+                <td><strong>${comp.field_name || 'Unknown'}</strong></td>
+                <td>${escapeHtml(gtDisplay)}</td>
+                <td>${escapeHtml(aiDisplay)}</td>
+                <td>
+                    <span class="match-indicator ${comp.is_match ? 'match' : 'mismatch'}">
+                        ${comp.is_match ? '✓' : '✗'}
+                    </span>
+                </td>
+                <td>
+                    <span class="similarity-score ${simClass}">${similarityPct}%</span>
+                    <span class="basis-badge">${basisShort}</span>
+                </td>
+            `;
+            
+            tbody.appendChild(row);
+        });
+        
+        table.appendChild(tbody);
+        container.appendChild(table);
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     // --- 6. Helpers ---
