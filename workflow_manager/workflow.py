@@ -2430,8 +2430,14 @@ class WorkflowManager:
                 with open(master_record_path, "r", encoding="utf-8") as f:
                     master_data = json.load(f)
                 
+                # Get API key from environment
+                api_key = os.environ.get("GEMINI_API_KEY")
+                if not api_key or not api_key.strip():
+                    logger.error(f"[{gid}] GEMINI_API_KEY environment variable is REQUIRED for report generation")
+                    return False
+                
                 # Generate LaTeX report directly
-                generate_latex_report(master_data, filename=None, api_key=None)
+                generate_latex_report(master_data, filename=None, api_key=api_key)
                 
             except Exception as e:
                 error_msg = f"Report generator failed: {e}"

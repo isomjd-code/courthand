@@ -9,9 +9,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 INPUT_FILE = "master_record.json" 
 OUTPUT_LATEX_PATH = "comparison_report.tex"
-DEFAULT_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-if not DEFAULT_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable must be set")
+DEFAULT_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+# Note: We don't raise an error here at import time because the environment variable
+# might be set later (e.g., via .env file loaded by python-dotenv).
+# Validation happens at runtime in report.py main() function.
 EMBED_MODEL = "gemini-embedding-001"
 
 SIMILARITY_THRESHOLD = 0.78

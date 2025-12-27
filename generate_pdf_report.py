@@ -62,10 +62,24 @@ def generate_report(master_record_path):
         # Determine output directory
         output_dir = os.path.dirname(os.path.abspath(master_record_path))
         
+        # Get API key from environment
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key or not api_key.strip():
+            error_msg = (
+                "ERROR: GEMINI_API_KEY environment variable is REQUIRED for postea and pleadings matching.\n"
+                "Please set GEMINI_API_KEY environment variable with a valid Gemini API key."
+            )
+            print(f"\n{'='*80}", file=sys.stderr)
+            print(error_msg, file=sys.stderr)
+            print(f"{'='*80}\n", file=sys.stderr)
+            print("Waiting 5 seconds for you to see this error...")
+            time.sleep(5)
+            return None
+        
         # Generate LaTeX file
         print("Generating LaTeX report...")
         try:
-            metrics = generate_latex_report(master_data, filename=None, api_key=None)
+            metrics = generate_latex_report(master_data, filename=None, api_key=api_key)
         except Exception as e:
             error_msg = f"ERROR: Failed to generate LaTeX report: {e}"
             print(f"\n{'='*80}", file=sys.stderr)

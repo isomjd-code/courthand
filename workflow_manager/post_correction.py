@@ -949,205 +949,205 @@ def run_batch_post_correction(
         if not batch_job:
             # Prepare batch requests in JSONL format
             with open(jsonl_file, 'w', encoding='utf-8') as f:
-            for idx, (image_path, data) in enumerate(image_lines_map.items()):
-                lines = data['lines']
-                image_name = data['image_name']
-                key = sanitize_custom_id(image_name)
-                
-                # Prepare lines data for prompt
-                lines_data = []
-                for line_idx, line in enumerate(lines, 1):
-                    entry = {
-                        "key": f"L{line_idx:02d}",
-                        "htr_text": line.get("htr_text", ""),
-                    }
-                    if line.get("bbox"):
-                        entry["bbox"] = line["bbox"]
-                    lines_data.append(entry)
-                
-                # Load individual line images if out_dir is provided
-                line_image_paths = []
-                has_line_images = False
-                
-                if out_dir:
-                    basename = os.path.splitext(os.path.basename(image_name))[0]
-                    work_dir = os.path.join(out_dir, basename)
-                    lines_dir = os.path.join(work_dir, "lines")
+                for idx, (image_path, data) in enumerate(image_lines_map.items()):
+                    lines = data['lines']
+                    image_name = data['image_name']
+                    key = sanitize_custom_id(image_name)
                     
-                    if os.path.exists(lines_dir):
-                        logger.info(f"[{batch_id}] Looking for line images in {lines_dir} for {key}...")
-                        found_count = 0
-                        
-                        # Parallelize line image finding
-                        from concurrent.futures import ThreadPoolExecutor, as_completed
-                        
-                        def find_line_image(line_idx: int, line: Dict) -> Tuple[int, Optional[str]]:
-                            """Find line image path for a single line. Returns (index, path or None)."""
-                            line_id = line.get("line_id")
-                            
-                            if not line_id:
-                                return (line_idx - 1, None)  # Convert to 0-based index
-                            
-                            # Try .png first
-                            line_image_path = os.path.join(lines_dir, f"{line_id}.png")
-                            
-                            if not os.path.exists(line_image_path):
-                                # Try other extensions
-                                for ext in ['.jpg', '.jpeg']:
-                                    alt_path = os.path.join(lines_dir, f"{line_id}{ext}")
-                                    if os.path.exists(alt_path):
-                                        return (line_idx - 1, alt_path)
-                                return (line_idx - 1, None)
-                            
-                            return (line_idx - 1, line_image_path)
-                        
-                        # Find all line images in parallel
-                        max_workers = min(20, len(lines))  # Limit concurrent file checks
-                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                            future_to_idx = {
-                                executor.submit(find_line_image, line_idx, line): line_idx
-                                for line_idx, line in enumerate(lines, 1)
-                            }
-                            
-                            # Collect results in order
-                            results = {}
-                            for future in as_completed(future_to_idx):
-                                idx, path = future.result()
-                                results[idx] = path
-                                if path is not None:
-                                    found_count += 1
-                            
-                            # Build line_image_paths in order
-                            line_image_paths = [results.get(idx) for idx in range(len(lines))]
-                            has_line_images = found_count > 0
-                        
-                        if found_count > 0:
-                            logger.info(f"[{batch_id}] Found {found_count} line images for {key} (out of {len(lines)} lines)")
-                        else:
-                            logger.warning(f"[{batch_id}] No line images found for {key} in {lines_dir}")
-                    else:
-                        logger.warning(f"[{batch_id}] Line images directory does not exist for {key}: {lines_dir}")
-                
-                # Build prompt
-                prompt_text = build_post_correction_prompt(lines_data, has_line_images=has_line_images)
-                
-                # Upload line images if available
-                parts = [{"text": prompt_text}]
-                uploaded_line_images = []
-                
-                if has_line_images:
-                    # Helper function to upload a single image
-                    def upload_single_image(line_idx: int, line_img_path: str) -> Optional[Tuple[int, Any]]:
-                        """Upload a single line image and return (index, uploaded_image) or None if failed."""
-                        if not line_img_path or not os.path.exists(line_img_path):
-                            return None
-                        
-                        try:
-                            # Check file size
-                            file_size = os.path.getsize(line_img_path)
-                            if file_size > 20 * 1024 * 1024:  # 20MB limit
-                                logger.warning(f"[{batch_id}] Line image {line_idx+1} for {key} is too large ({file_size / 1024 / 1024:.2f}MB), skipping")
-                                return None
-                            
-                            # Upload line image file
-                            logger.debug(f"[{batch_id}] Uploading line image {line_idx+1} for {key}: {os.path.basename(line_img_path)}")
-                            uploaded_image = client.files.upload(
-                                file=line_img_path,
-                                config=types.UploadFileConfig(mime_type="image/png")
-                            )
-                            
-                            # Wait for file to be active
-                            max_wait = 60
-                            wait_count = 0
-                            while uploaded_image.state.name != "ACTIVE" and wait_count < max_wait:
-                                time.sleep(1)
-                                uploaded_image = client.files.get(name=uploaded_image.name)
-                                wait_count += 1
-                            
-                            if uploaded_image.state.name != "ACTIVE":
-                                logger.warning(f"[{batch_id}] Line image {line_idx+1} for {key} not active after upload")
-                                return None
-                            
-                            logger.debug(f"[{batch_id}] Line image {line_idx+1} for {key} uploaded and active")
-                            return (line_idx, uploaded_image)
-                        except Exception as e:
-                            logger.warning(f"[{batch_id}] Error uploading line image {line_idx+1} for {key}: {e}")
-                            return None
+                    # Prepare lines data for prompt
+                    lines_data = []
+                    for line_idx, line in enumerate(lines, 1):
+                        entry = {
+                            "key": f"L{line_idx:02d}",
+                            "htr_text": line.get("htr_text", ""),
+                        }
+                        if line.get("bbox"):
+                            entry["bbox"] = line["bbox"]
+                        lines_data.append(entry)
                     
-                    # Upload all line images in parallel
-                    upload_tasks = [
-                        (line_idx, line_img_path)
-                        for line_idx, line_img_path in enumerate(line_image_paths)
-                        if line_img_path is not None
-                    ]
+                    # Load individual line images if out_dir is provided
+                    line_image_paths = []
+                    has_line_images = False
                     
-                    if upload_tasks:
-                        logger.info(f"[{batch_id}] Uploading {len(upload_tasks)} line images for {key}...")
-                        max_workers = min(10, len(upload_tasks))
-                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                            future_to_task = {
-                                executor.submit(upload_single_image, idx, path): (idx, path)
-                                for idx, path in upload_tasks
-                            }
-                            
-                            upload_results = {}
-                            completed = 0
-                            for future in as_completed(future_to_task):
-                                result = future.result()
-                                if result is not None:
-                                    line_idx, uploaded_image = result
-                                    upload_results[line_idx] = uploaded_image
-                                    completed += 1
-                                    if completed % 5 == 0 or completed == len(upload_tasks):
-                                        logger.debug(f"[{batch_id}] Uploaded {completed}/{len(upload_tasks)} line images for {key}")
+                    if out_dir:
+                        basename = os.path.splitext(os.path.basename(image_name))[0]
+                        work_dir = os.path.join(out_dir, basename)
+                        lines_dir = os.path.join(work_dir, "lines")
                         
-                        # Build parts in original order
-                        for line_idx in sorted(upload_results.keys()):
-                            uploaded_image = upload_results[line_idx]
-                            file_uri = uploaded_image.uri if hasattr(uploaded_image, 'uri') and uploaded_image.uri else uploaded_image.name
-                            parts.append({
-                                "file_data": {
-                                    "mime_type": "image/png",
-                                    "file_uri": file_uri
+                        if os.path.exists(lines_dir):
+                            logger.info(f"[{batch_id}] Looking for line images in {lines_dir} for {key}...")
+                            found_count = 0
+                            
+                            # Parallelize line image finding
+                            from concurrent.futures import ThreadPoolExecutor, as_completed
+                            
+                            def find_line_image(line_idx: int, line: Dict) -> Tuple[int, Optional[str]]:
+                                """Find line image path for a single line. Returns (index, path or None)."""
+                                line_id = line.get("line_id")
+                                
+                                if not line_id:
+                                    return (line_idx - 1, None)  # Convert to 0-based index
+                                
+                                # Try .png first
+                                line_image_path = os.path.join(lines_dir, f"{line_id}.png")
+                                
+                                if not os.path.exists(line_image_path):
+                                    # Try other extensions
+                                    for ext in ['.jpg', '.jpeg']:
+                                        alt_path = os.path.join(lines_dir, f"{line_id}{ext}")
+                                        if os.path.exists(alt_path):
+                                            return (line_idx - 1, alt_path)
+                                    return (line_idx - 1, None)
+                                
+                                return (line_idx - 1, line_image_path)
+                            
+                            # Find all line images in parallel
+                            max_workers = min(20, len(lines))  # Limit concurrent file checks
+                            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                                future_to_idx = {
+                                    executor.submit(find_line_image, line_idx, line): line_idx
+                                    for line_idx, line in enumerate(lines, 1)
                                 }
-                            })
-                            uploaded_line_images.append(uploaded_image)
+                                
+                                # Collect results in order
+                                results = {}
+                                for future in as_completed(future_to_idx):
+                                    idx, path = future.result()
+                                    results[idx] = path
+                                    if path is not None:
+                                        found_count += 1
+                                
+                                # Build line_image_paths in order
+                                line_image_paths = [results.get(idx) for idx in range(len(lines))]
+                                has_line_images = found_count > 0
+                            
+                            if found_count > 0:
+                                logger.info(f"[{batch_id}] Found {found_count} line images for {key} (out of {len(lines)} lines)")
+                            else:
+                                logger.warning(f"[{batch_id}] No line images found for {key} in {lines_dir}")
+                        else:
+                            logger.warning(f"[{batch_id}] Line images directory does not exist for {key}: {lines_dir}")
+                    
+                    # Build prompt
+                    prompt_text = build_post_correction_prompt(lines_data, has_line_images=has_line_images)
+                    
+                    # Upload line images if available
+                    parts = [{"text": prompt_text}]
+                    uploaded_line_images = []
+                    
+                    if has_line_images:
+                        # Helper function to upload a single image
+                        def upload_single_image(line_idx: int, line_img_path: str) -> Optional[Tuple[int, Any]]:
+                            """Upload a single line image and return (index, uploaded_image) or None if failed."""
+                            if not line_img_path or not os.path.exists(line_img_path):
+                                return None
+                            
+                            try:
+                                # Check file size
+                                file_size = os.path.getsize(line_img_path)
+                                if file_size > 20 * 1024 * 1024:  # 20MB limit
+                                    logger.warning(f"[{batch_id}] Line image {line_idx+1} for {key} is too large ({file_size / 1024 / 1024:.2f}MB), skipping")
+                                    return None
+                                
+                                # Upload line image file
+                                logger.debug(f"[{batch_id}] Uploading line image {line_idx+1} for {key}: {os.path.basename(line_img_path)}")
+                                uploaded_image = client.files.upload(
+                                    file=line_img_path,
+                                    config=types.UploadFileConfig(mime_type="image/png")
+                                )
+                                
+                                # Wait for file to be active
+                                max_wait = 60
+                                wait_count = 0
+                                while uploaded_image.state.name != "ACTIVE" and wait_count < max_wait:
+                                    time.sleep(1)
+                                    uploaded_image = client.files.get(name=uploaded_image.name)
+                                    wait_count += 1
+                                
+                                if uploaded_image.state.name != "ACTIVE":
+                                    logger.warning(f"[{batch_id}] Line image {line_idx+1} for {key} not active after upload")
+                                    return None
+                                
+                                logger.debug(f"[{batch_id}] Line image {line_idx+1} for {key} uploaded and active")
+                                return (line_idx, uploaded_image)
+                            except Exception as e:
+                                logger.warning(f"[{batch_id}] Error uploading line image {line_idx+1} for {key}: {e}")
+                                return None
                         
-                        logger.info(f"[{batch_id}] Successfully uploaded {len(upload_results)} line images for {key} (added to batch request)")
-                    else:
-                        logger.warning(f"[{batch_id}] No line images to upload for {key}")
-                
-                if len(parts) == 1:  # Only prompt, no images
-                    logger.warning(f"[{batch_id}] No valid line images for {key}, skipping")
-                    continue
-                
-                # Build generation config
-                gen_config = {
-                    "temperature": 0.0,
-                    "max_output_tokens": 32768,
-                    "response_mime_type": "application/json",
-                    "media_resolution": "MEDIA_RESOLUTION_MEDIUM" if has_line_images else None,
-                    "thinking_config": {
-                        "include_thoughts": True,
-                        "thinking_level": "LOW"
+                        # Upload all line images in parallel
+                        upload_tasks = [
+                            (line_idx, line_img_path)
+                            for line_idx, line_img_path in enumerate(line_image_paths)
+                            if line_img_path is not None
+                        ]
+                        
+                        if upload_tasks:
+                            logger.info(f"[{batch_id}] Uploading {len(upload_tasks)} line images for {key}...")
+                            max_workers = min(10, len(upload_tasks))
+                            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                                future_to_task = {
+                                    executor.submit(upload_single_image, idx, path): (idx, path)
+                                    for idx, path in upload_tasks
+                                }
+                                
+                                upload_results = {}
+                                completed = 0
+                                for future in as_completed(future_to_task):
+                                    result = future.result()
+                                    if result is not None:
+                                        line_idx, uploaded_image = result
+                                        upload_results[line_idx] = uploaded_image
+                                        completed += 1
+                                        if completed % 5 == 0 or completed == len(upload_tasks):
+                                            logger.debug(f"[{batch_id}] Uploaded {completed}/{len(upload_tasks)} line images for {key}")
+                            
+                            # Build parts in original order
+                            for line_idx in sorted(upload_results.keys()):
+                                uploaded_image = upload_results[line_idx]
+                                file_uri = uploaded_image.uri if hasattr(uploaded_image, 'uri') and uploaded_image.uri else uploaded_image.name
+                                parts.append({
+                                    "file_data": {
+                                        "mime_type": "image/png",
+                                        "file_uri": file_uri
+                                    }
+                                })
+                                uploaded_line_images.append(uploaded_image)
+                            
+                            logger.info(f"[{batch_id}] Successfully uploaded {len(upload_results)} line images for {key} (added to batch request)")
+                        else:
+                            logger.warning(f"[{batch_id}] No line images to upload for {key}")
+                    
+                    if len(parts) == 1:  # Only prompt, no images
+                        logger.warning(f"[{batch_id}] No valid line images for {key}, skipping")
+                        continue
+                    
+                    # Build generation config
+                    gen_config = {
+                        "temperature": 0.0,
+                        "max_output_tokens": 32768,
+                        "response_mime_type": "application/json",
+                        "media_resolution": "MEDIA_RESOLUTION_MEDIUM" if has_line_images else None,
+                        "thinking_config": {
+                            "include_thoughts": True,
+                            "thinking_level": "LOW"
+                        }
                     }
-                }
-                
-                # Remove None values
-                gen_config = {k: v for k, v in gen_config.items() if v is not None}
-                
-                # Build request object
-                num_line_images = len(parts) - 1  # Subtract 1 for the prompt text
-                request_obj = {
-                    "key": key,
-                    "request": {
-                        "contents": [{"parts": parts}],
-                        "generation_config": gen_config
+                    
+                    # Remove None values
+                    gen_config = {k: v for k, v in gen_config.items() if v is not None}
+                    
+                    # Build request object
+                    num_line_images = len(parts) - 1  # Subtract 1 for the prompt text
+                    request_obj = {
+                        "key": key,
+                        "request": {
+                            "contents": [{"parts": parts}],
+                            "generation_config": gen_config
+                        }
                     }
-                }
-                
-                f.write(json.dumps(request_obj) + "\n")
-                logger.info(f"[{batch_id}] Added batch request for {key} with {num_line_images} line images")
+                    
+                    f.write(json.dumps(request_obj) + "\n")
+                    logger.info(f"[{batch_id}] Added batch request for {key} with {num_line_images} line images")
         
             # Check if we have any requests
             if jsonl_file.stat().st_size == 0:

@@ -418,6 +418,17 @@ def generate_latex_report(master_data: Dict[str, Any], filename: Optional[str] =
     
     Returns the metrics from the first (best) match, or the single match if only one exists.
     """
+    # Fallback to environment variable if api_key is not provided
+    if not api_key or not api_key.strip():
+        api_key = os.getenv("GEMINI_API_KEY") or DEFAULT_API_KEY
+        if not api_key or not api_key.strip():
+            error_msg = (
+                "CRITICAL: Gemini API key is REQUIRED for postea and pleadings matching. "
+                "Please set GEMINI_API_KEY environment variable."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+    
     try:
         # Extract ground truth cases
         ground_truth_data = master_data.get("ground_truth_from_db", [])
@@ -593,7 +604,22 @@ def main() -> None:
             time.sleep(5)
             sys.exit(1)
 
-        api_key = os.getenv("GEMINI_API_KEY", DEFAULT_API_KEY)
+        # Get API key from environment or config, with proper validation
+        api_key = os.getenv("GEMINI_API_KEY") or DEFAULT_API_KEY
+        if not api_key or not api_key.strip():
+            error_msg = (
+                "ERROR: GEMINI_API_KEY environment variable is REQUIRED for postea and pleadings matching.\n"
+                "Please set GEMINI_API_KEY environment variable with a valid Gemini API key.\n"
+                "You can set it by running: export GEMINI_API_KEY=your_api_key_here\n"
+                "Or add it to your .env file if using python-dotenv."
+            )
+            print(f"\n{'='*80}", file=sys.stderr)
+            print(error_msg, file=sys.stderr)
+            print(f"{'='*80}\n", file=sys.stderr)
+            logger.error(error_msg)
+            print("Waiting 5 seconds for you to see this error...")
+            time.sleep(5)
+            sys.exit(1)
         
         # Determine output directory from master_record.json location
         master_record_dir = os.path.dirname(os.path.abspath(target_file))
