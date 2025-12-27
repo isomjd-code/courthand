@@ -1618,98 +1618,162 @@ def _generate_case_metadata_block(
 def _generate_pleadings_and_postea_blocks(
     gt_case: Dict, ai_case: Dict, ai_ref: Dict, metrics: ValidationMetrics, api_key: Optional[str]
 ) -> List[str]:
-    """Generate pleading and postea blocks using smart alignment."""
-    logger.info("[Report Generation] Generating pleadings and postea blocks (will use batch embeddings)")
+    """Generate pleading and postea blocks using smart alignment with cross-matching.
+    
+    Allows GT pleadings to match AI pleadings or postea, and GT postea to match AI pleadings or postea.
+    """
+    logger.info("[Report Generation] Generating pleadings and postea blocks with cross-matching (will use batch embeddings)")
     # Normalize AI case structure
     normalized_ai_case = _normalize_ai_case_structure(ai_case, ai_ref)
     
-    latex = [r"\subsubsection*{Pleading}"]
-    gt_pleadings = gt_case.get("TblPleadings", [])
+    # Collect all AI items (pleadings + postea) into a combined pool with source labels
     ai_pleadings = normalized_ai_case.get("TblPleadings", ai_case.get("TblPleadings", []))
-    logger.info(f"[Report Generation]   Processing {len(gt_pleadings)} GT pleadings and {len(ai_pleadings)} AI pleadings")
+    if not ai_pleadings and "case_details" in ai_case:
+        pleadings_alt = ai_case.get("case_details", {}).get("pleadings", [])
+        if pleadings_alt:
+            logger.info(f"[Report Generation]   Found {len(pleadings_alt)} pleadings in case_details.pleadings, using them")
+            ai_pleadings = pleadings_alt
     
-    # Debug: Log actual content if empty
-    if not gt_pleadings:
-        logger.warning(f"[Report Generation]   No GT pleadings found in gt_case keys: {list(gt_case.keys())}")
-    if not ai_pleadings:
-        logger.warning(f"[Report Generation]   No AI pleadings found. normalized_ai_case keys: {list(normalized_ai_case.keys())}, ai_case keys: {list(ai_case.keys())}")
-        # Try to find pleadings in alternative locations
-        if "case_details" in ai_case:
-            pleadings_alt = ai_case.get("case_details", {}).get("pleadings", [])
-            if pleadings_alt:
-                logger.info(f"[Report Generation]   Found {len(pleadings_alt)} pleadings in case_details.pleadings, using them")
-                ai_pleadings = pleadings_alt
-    
-    aligned_pleadings = smart_reconstruct_and_match(
-        gt_pleadings, ai_pleadings, "PleadingText", "Case Details", metrics, api_key
-    )
-
-    for item in aligned_pleadings:
-        latex.append(r"\begin{textbox}")
-        if item["type"] == "match":
-            latex.extend(
-                [
-                    f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
-                    f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
-                    f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\%}}",
-                ]
-            )
-        elif item["type"] == "unmatched_gt":
-            latex.extend(
-                [
-                    f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
-                    r"\textit{(No matching AI extraction found)}\\",
-                ]
-            )
-        else:
-            latex.extend(
-                [
-                    r"\textbf{(AI Only)}\\",
-                    f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
-                ]
-            )
-        latex.append(r"\end{textbox}")
-
-    latex.append(r"\subsubsection*{Postea}")
-    gt_postea = gt_case.get("TblPostea", [])
     ai_postea = normalized_ai_case.get("TblPostea", ai_case.get("TblPostea", []))
-    logger.info(f"[Report Generation]   Processing {len(gt_postea)} GT postea and {len(ai_postea)} AI postea")
     
-    # Debug: Log actual content if empty
-    if not gt_postea:
-        logger.warning(f"[Report Generation]   No GT postea found in gt_case keys: {list(gt_case.keys())}")
-    if not ai_postea:
-        logger.warning(f"[Report Generation]   No AI postea found. normalized_ai_case keys: {list(normalized_ai_case.keys())}, ai_case keys: {list(ai_case.keys())}")
+    # Combine AI items with normalized text key and source labels
+    # Normalize to use a consistent "Text" key that works for both pleadings and postea
+    combined_ai_items = []
+    for item in ai_pleadings:
+        normalized_item = {**item, "_source": "pleading"}
+        # Add a "Text" field that contains the PleadingText value for consistent matching
+        if "PleadingText" in normalized_item:
+            normalized_item["Text"] = normalized_item["PleadingText"]
+        combined_ai_items.append(normalized_item)
+    for item in ai_postea:
+        normalized_item = {**item, "_source": "postea"}
+        # Add a "Text" field that contains the PosteaText value for consistent matching
+        if "PosteaText" in normalized_item:
+            normalized_item["Text"] = normalized_item["PosteaText"]
+        combined_ai_items.append(normalized_item)
     
-    aligned_postea = smart_reconstruct_and_match(
-        gt_postea, ai_postea, "PosteaText", "Case Details", metrics, api_key
-    )
+    logger.info(f"[Report Generation]   Combined AI pool: {len(ai_pleadings)} pleadings + {len(ai_postea)} postea = {len(combined_ai_items)} total items")
+    
+    # Get GT items and normalize them to use "Text" key as well
+    gt_pleadings = gt_case.get("TblPleadings", [])
+    gt_postea = gt_case.get("TblPostea", [])
+    
+    # Normalize GT items to use "Text" key for consistent matching
+    normalized_gt_pleadings = []
+    for item in gt_pleadings:
+        normalized_item = {**item}
+        if "PleadingText" in normalized_item:
+            normalized_item["Text"] = normalized_item["PleadingText"]
+        normalized_gt_pleadings.append(normalized_item)
+    
+    normalized_gt_postea = []
+    for item in gt_postea:
+        normalized_item = {**item}
+        if "PosteaText" in normalized_item:
+            normalized_item["Text"] = normalized_item["PosteaText"]
+        normalized_gt_postea.append(normalized_item)
+    
+    logger.info(f"[Report Generation]   GT items: {len(gt_pleadings)} pleadings, {len(gt_postea)} postea")
+    
+    # Match GT pleadings against combined AI pool
+    latex = [r"\subsubsection*{Pleading}"]
+    matched_ai_indices = set()
+    if normalized_gt_pleadings:
+        # Use "Text" as the key for consistent matching across both pleadings and postea
+        aligned_pleadings = smart_reconstruct_and_match(
+            normalized_gt_pleadings, combined_ai_items, "Text", "Case Details", metrics, api_key
+        )
+        
+        # Track which AI items were matched
+        # Since smart_reconstruct_and_match splits text into sentences, we need to find
+        # which original AI items contain the matched sentences
+        for item in aligned_pleadings:
+            if item["type"] == "match":
+                ai_text = item.get("ai", "").strip()
+                if not ai_text:
+                    continue
+                # Find the index of the matched AI item by checking if the matched text
+                # appears in the original item's text
+                for idx, ai_item in enumerate(combined_ai_items):
+                    if idx in matched_ai_indices:
+                        continue  # Already matched
+                    ai_item_text = str(ai_item.get("Text", "")).strip()
+                    if not ai_item_text:
+                        continue
+                    # Check if the matched sentence appears in this item's text
+                    # (accounting for sentence splitting)
+                    if ai_text in ai_item_text or ai_item_text.startswith(ai_text[:50]) or ai_text.startswith(ai_item_text[:50]):
+                        matched_ai_indices.add(idx)
+                        break
+        
+        # Filter out matched items from combined pool for postea matching
+        remaining_ai_items = [item for idx, item in enumerate(combined_ai_items) if idx not in matched_ai_indices]
+        
+        for item in aligned_pleadings:
+            latex.append(r"\begin{textbox}")
+            if item["type"] == "match":
+                latex.extend(
+                    [
+                        f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
+                        f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
+                        f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\%}}",
+                    ]
+                )
+            elif item["type"] == "unmatched_gt":
+                latex.extend(
+                    [
+                        f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
+                        r"\textit{(No matching AI extraction found)}\\",
+                    ]
+                )
+            else:
+                latex.extend(
+                    [
+                        r"\textbf{(AI Only)}\\",
+                        f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
+                    ]
+                )
+            latex.append(r"\end{textbox}")
+    else:
+        logger.warning(f"[Report Generation]   No GT pleadings found in gt_case keys: {list(gt_case.keys())}")
+        remaining_ai_items = combined_ai_items
 
-    for item in aligned_postea:
-        latex.append(r"\begin{textbox}")
-        if item["type"] == "match":
-            latex.extend(
-                [
-                    f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
-                    f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
-                    f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\%}}",
-                ]
-            )
-        elif item["type"] == "unmatched_gt":
-            latex.extend(
-                [
-                    f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
-                    r"\textit{(No matching AI extraction found)}\\",
-                ]
-            )
-        else:
-            latex.extend(
-                [
-                    r"\textbf{(AI Only)}\\",
-                    f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
-                ]
-            )
-        latex.append(r"\end{textbox}")
+    # Match GT postea against remaining AI items (unmatched pleadings + postea)
+    latex.append(r"\subsubsection*{Postea}")
+    if normalized_gt_postea:
+        # Use "Text" as the key for consistent matching across both pleadings and postea
+        aligned_postea = smart_reconstruct_and_match(
+            normalized_gt_postea, remaining_ai_items, "Text", "Case Details", metrics, api_key
+        )
+
+        for item in aligned_postea:
+            latex.append(r"\begin{textbox}")
+            if item["type"] == "match":
+                latex.extend(
+                    [
+                        f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
+                        f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
+                        f"\\textcolor{{{get_accuracy_color(item['score']*100)}}}{{\\scriptsize Similarity: {item['score']*100:.1f}\\%}}",
+                    ]
+                )
+            elif item["type"] == "unmatched_gt":
+                latex.extend(
+                    [
+                        f"\\gtlabel~{clean_text_for_xelatex(item['gt'])}\\\\",
+                        r"\textit{(No matching AI extraction found)}\\",
+                    ]
+                )
+            else:
+                latex.extend(
+                    [
+                        r"\textbf{(AI Only)}\\",
+                        f"\\ailabel~{clean_text_for_xelatex(item['ai'])}\\\\",
+                    ]
+                )
+            latex.append(r"\end{textbox}")
+    else:
+        logger.warning(f"[Report Generation]   No GT postea found in gt_case keys: {list(gt_case.keys())}")
+    
     return latex
 
 
