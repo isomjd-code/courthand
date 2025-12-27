@@ -54,6 +54,7 @@ from .settings import (
     IMAGE_DIR,
     KRAKEN_ENV,
     LOG_DIR,
+    MAX_WORKERS,
     MODEL_TEXT,
     MODEL_VISION,
     OUTPUT_DIR,
@@ -3829,7 +3830,7 @@ class WorkflowManager:
         Skips groups that already have final_index.json unless force=True.
         If rerun_from_post_pylaia=True, keeps existing Kraken/PyLaia results but
         reruns everything from post-correction onwards.
-        Processes groups in parallel with up to 5 groups pending at a time.
+        Processes groups in parallel with configurable number of workers (default: 6).
 
         Args:
             groups: Dictionary mapping group IDs to lists of image file paths.
@@ -3839,7 +3840,7 @@ class WorkflowManager:
             logger.error("No groups found.")
             return
 
-        logger.info(f"=== STARTING PARALLEL PROCESSING ({len(groups)} Groups, max 5 concurrent) ===")
+        logger.info(f"=== STARTING PARALLEL PROCESSING ({len(groups)} Groups, max {MAX_WORKERS} concurrent) ===")
 
         # Filter out groups that should be skipped before processing
         groups_to_process = {}
@@ -3866,10 +3867,10 @@ class WorkflowManager:
             logger.info("No groups to process (all already complete).")
             return
 
-        logger.info(f"Processing {len(groups_to_process)} groups in parallel (max 5 concurrent)...")
+        logger.info(f"Processing {len(groups_to_process)} groups in parallel (max {MAX_WORKERS} concurrent)...")
 
         # Process groups in parallel using ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Submit all group processing tasks
             future_to_gid = {
                 executor.submit(self._process_group, gid, paths): gid

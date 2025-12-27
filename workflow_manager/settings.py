@@ -63,6 +63,11 @@ API_TIMEOUT = 1800000  # 30 minutes timeout (30 * 60 * 1000 ms) for API calls an
 API_MAX_RETRIES = 5  # Number of retries for 504/timeout errors (increased for large files)
 API_RETRY_DELAY = 15  # Initial delay in seconds between retries (will use exponential backoff)
 
+# PARALLEL PROCESSING CONFIGURATION
+# Maximum number of parallel workers for processing groups
+# Can be overridden via WORKFLOW_MAX_WORKERS environment variable
+MAX_WORKERS = int(os.environ.get('WORKFLOW_MAX_WORKERS', '6'))  # Default: 6 parallel workers
+
 # Primary Google API key for Gemini (paid key required)
 GOOGLE_API_KEY = GEMINI_API_KEY
 
