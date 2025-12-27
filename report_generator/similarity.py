@@ -86,13 +86,14 @@ def get_similarity_score(text1: str, text2: str, api_key: Optional[str], context
     if not text1 or not text2:
         return 0.0
     if not (GEMINI_AVAILABLE and api_key):
+        logger.debug(f"[Embedding API] Falling back to Levenshtein similarity for {context} (embeddings unavailable)")
         return calculate_similarity(text1, text2)
 
     try:
         # Log the embedding API call
         text1_preview = text1[:50] + "..." if len(text1) > 50 else text1
         text2_preview = text2[:50] + "..." if len(text2) > 50 else text2
-        logger.info(f"[Embedding API] Making embedding call for {context}")
+        logger.debug(f"[Embedding API] Using Gemini embeddings for pairwise similarity: {context}")
         logger.debug(f"[Embedding API]   Text1 preview: {text1_preview}")
         logger.debug(f"[Embedding API]   Text2 preview: {text2_preview}")
         
@@ -591,12 +592,39 @@ def format_comparison_cell(comparison: FieldComparison) -> str:
     )
 
 
-def get_batch_embeddings(texts: List[str], api_key: Optional[str], context: str = "batch_processing") -> np.ndarray:
-    """Generate embeddings for a list of strings in a single batch."""
-    if not (texts and GEMINI_AVAILABLE and api_key):
+def get_batch_embeddings(texts: List[str], api_key: Optional[str], context: str = "batch_processing", require_embeddings: bool = False) -> np.ndarray:
+    """Generate embeddings for a list of strings in a single batch.
+    
+    Args:
+        texts: List of texts to embed
+        api_key: Gemini API key
+        context: Context string for logging
+        require_embeddings: If True, raise an error if embeddings cannot be generated
+    
+    Returns:
+        numpy array of embeddings, or empty array if unavailable
+    """
+    if not texts:
+        logger.warning(f"[Embedding API] No texts provided for {context}")
         return np.array([])
+    
+    if not GEMINI_AVAILABLE:
+        error_msg = f"[Embedding API] CRITICAL: Gemini library not available for {context}. Cannot generate embeddings."
+        logger.error(error_msg)
+        if require_embeddings:
+            raise RuntimeError(f"Gemini embeddings required but library not available. {error_msg}")
+        return np.array([])
+    
+    if not api_key:
+        error_msg = f"[Embedding API] CRITICAL: No API key provided for {context}. Cannot generate embeddings."
+        logger.error(error_msg)
+        if require_embeddings:
+            raise RuntimeError(f"Gemini embeddings required but no API key provided. {error_msg}")
+        return np.array([])
+    
     try:
-        logger.info(f"[Embedding API] Making batch embedding call for {context} with {len(texts)} texts")
+        logger.info(f"[Embedding API] ✓ Using Gemini embeddings for {context} with {len(texts)} texts")
+        logger.info(f"[Embedding API]   Model: {EMBED_MODEL}")
         logger.debug(f"[Embedding API]   First text preview: {texts[0][:50] if texts else 'N/A'}...")
         if len(texts) > 1:
             logger.debug(f"[Embedding API]   Last text preview: {texts[-1][:50]}...")
@@ -608,10 +636,13 @@ def get_batch_embeddings(texts: List[str], api_key: Optional[str], context: str 
             config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY"),
         )
         embeddings = np.array([np.array(embedding.values) for embedding in response.embeddings])
-        logger.info(f"[Embedding API]   Batch embedding completed: {len(embeddings)} embeddings generated")
+        logger.info(f"[Embedding API] ✓ Batch embedding SUCCESS: {len(embeddings)} embeddings generated for {context}")
         return embeddings
     except Exception as e:
-        logger.warning(f"[Embedding API] Batch embedding call failed for {context}: {e}")
+        error_msg = f"[Embedding API] ✗ Batch embedding call FAILED for {context}: {e}"
+        logger.error(error_msg)
+        if require_embeddings:
+            raise RuntimeError(f"Gemini embeddings required but API call failed. {error_msg}") from e
         return np.array([])
 
 
@@ -656,17 +687,56 @@ def smart_reconstruct_and_match(
     else:
         alignment_threshold = ALIGNMENT_THRESHOLD
 
-    gt_embeddings = get_batch_embeddings(gt_sentences, api_key, context=f"smart_match_gt:{category}")
-    ai_embeddings = get_batch_embeddings(ai_sentences, api_key, context=f"smart_match_ai:{category}")
+    # For postea and pleadings matching, embeddings are REQUIRED
+    # Check if this is a postea/pleadings context that requires embeddings
+    is_pleadings_postea = category == "Case Details"
+    require_embeddings = is_pleadings_postea
+    
+    if require_embeddings:
+        logger.info(f"[Report Generation] ⚠ REQUIRING Gemini embeddings for {category} matching (postea/pleadings)")
+        logger.info(f"[Report Generation]   Checking embedding availability...")
+        if not GEMINI_AVAILABLE:
+            raise RuntimeError(
+                f"CRITICAL: Gemini embeddings are REQUIRED for {category} (postea/pleadings) matching, "
+                f"but the Gemini library is not available. Please install: pip install google-genai"
+            )
+        if not api_key:
+            raise RuntimeError(
+                f"CRITICAL: Gemini embeddings are REQUIRED for {category} (postea/pleadings) matching, "
+                f"but no API key is provided. Please set GEMINI_API_KEY environment variable."
+            )
+
+    gt_embeddings = get_batch_embeddings(
+        gt_sentences, 
+        api_key, 
+        context=f"smart_match_gt:{category}",
+        require_embeddings=require_embeddings
+    )
+    ai_embeddings = get_batch_embeddings(
+        ai_sentences, 
+        api_key, 
+        context=f"smart_match_ai:{category}",
+        require_embeddings=require_embeddings
+    )
 
     if len(gt_embeddings) == n_gt and len(ai_embeddings) == n_ai:
         # Use batch embeddings for semantic similarity
+        logger.info(f"[Report Generation] ✓ Using BATCH Gemini embeddings for {category} matching")
+        logger.info(f"[Report Generation]   GT embeddings: {len(gt_embeddings)} vectors, AI embeddings: {len(ai_embeddings)} vectors")
         similarity_matrix = cosine_similarity(gt_embeddings, ai_embeddings)
         cost_matrix = 1.0 - similarity_matrix
     else:
         # Batch embeddings failed or unavailable - use pairwise semantic similarity
         # This ensures we always use semantic similarity when API is available
-        logger.info(f"[Report Generation]   Batch embeddings unavailable, computing pairwise semantic similarity")
+        if require_embeddings:
+            # This should not happen if require_embeddings=True, but check anyway
+            raise RuntimeError(
+                f"CRITICAL: Batch embeddings failed for {category} matching. "
+                f"Expected {n_gt} GT and {n_ai} AI embeddings, but got {len(gt_embeddings)} and {len(ai_embeddings)}. "
+                f"Embeddings are required for postea/pleadings matching."
+            )
+        logger.warning(f"[Report Generation] ⚠ Batch embeddings unavailable for {category}, falling back to pairwise semantic similarity")
+        logger.info(f"[Report Generation]   Expected {n_gt} GT and {n_ai} AI embeddings, but got {len(gt_embeddings)} and {len(ai_embeddings)}")
         cost_matrix = np.ones((n_gt, n_ai))
         for r in range(n_gt):
             for c in range(n_ai):

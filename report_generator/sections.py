@@ -27,6 +27,7 @@ except ImportError as e:
 
 from .config import PARTY_MATCH_THRESHOLD
 from .similarity import (
+    GEMINI_AVAILABLE,
     ValidationMetrics,
     calculate_similarity,
     compare_field,
@@ -1622,7 +1623,22 @@ def _generate_pleadings_and_postea_blocks(
     
     Allows GT pleadings to match AI pleadings or postea, and GT postea to match AI pleadings or postea.
     """
-    logger.info("[Report Generation] Generating pleadings and postea blocks with cross-matching (will use batch embeddings)")
+    logger.info("[Report Generation] Generating pleadings and postea blocks with cross-matching")
+    logger.info("[Report Generation] ⚠ REQUIRING Gemini embeddings for postea and pleadings matching")
+    
+    # Verify embeddings are available before proceeding
+    if not GEMINI_AVAILABLE:
+        raise RuntimeError(
+            "CRITICAL: Gemini embeddings are REQUIRED for postea and pleadings matching, "
+            "but the Gemini library is not available. Please install: pip install google-genai"
+        )
+    if not api_key:
+        raise RuntimeError(
+            "CRITICAL: Gemini API key is REQUIRED for postea and pleadings matching. "
+            "Please set GEMINI_API_KEY environment variable."
+        )
+    logger.info(f"[Report Generation] ✓ Gemini library available")
+    logger.info(f"[Report Generation] ✓ API key available for embeddings")
     # Normalize AI case structure
     normalized_ai_case = _normalize_ai_case_structure(ai_case, ai_ref)
     
