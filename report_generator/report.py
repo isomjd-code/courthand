@@ -307,25 +307,60 @@ def generate_latex_report_for_match(
             r"\end{tcolorbox}\end{center}",
         ])
     
-    latex.extend(
-        [
-            r"\begin{document}",
-            r"\maketitle",
-            r"\thispagestyle{fancy}",
-            r"\clearpage",
-            r"\tableofcontents",
-            r"\clearpage",
-            r"\begin{center}\begin{tcolorbox}[colback=white, colframe=gray!50, width=0.95\textwidth, halign=center,valign=center]",
-            r"\sffamily\matchicon\ \textbf{Exact Match} \quad \mismatchicon\ \textbf{Mismatch} \quad \gtlabel\ Ground Truth \quad \ailabel\ AI Extraction",
-            r"\end{tcolorbox}\end{center}",
-        ]
-    )
-
+    # Start document
+    latex.extend([r"\begin{document}"])
+    
+    # Generate case comparison first to populate metrics
     extracted_entities = master_data.get("extracted_entities", {})
     source_material = master_data.get("source_material", [])
     case_content = generate_case_comparison_section(
         gt_case, ai_case, ai_ref, metrics, api_key=api_key, extracted_entities=extracted_entities
     )
+    
+    # Now generate title page with validation overview (metrics now populated)
+    meta = master_data.get("case_metadata", {})
+    case_id = meta.get("group_id", "Unknown")
+    from .sections import clean_text_for_xelatex
+    case_id_clean = clean_text_for_xelatex(case_id)
+    
+    from .similarity import get_accuracy_color
+    summary = metrics.get_summary()
+    overall_acc = summary["overall_accuracy"]
+    avg_sim = summary["avg_similarity"]
+    acc_color = get_accuracy_color(overall_acc)
+    sim_color = get_accuracy_color(avg_sim)
+    
+    # Build title page content
+    title_page_content = [
+        r"\begin{center}",
+        r"{\sffamily\bfseries\Large AI Extraction Validation Report\par}",
+        r"\vspace{0.5cm}",
+        f"{{\\sffamily Case Reference: {case_id_clean}\\par}}",
+        r"\vspace{0.3cm}",
+        r"{\sffamily \today\par}",
+        r"\vspace{0.5cm}",
+        r"\end{center}",
+        r"\vspace{0.8cm}",
+        r"\tableofcontents",
+        r"\vspace{0.8cm}",
+        r"\begin{summarybox}[Validation Overview]",
+        r"\begin{center}\begin{tabular}{cccc}",
+        f"\\begin{{metricbox}}[Total Fields] \\Huge {summary['total_fields']} \\end{{metricbox}} &",
+        f"\\begin{{metricbox}}[Exact Matches] \\Huge\\textcolor{{MatchColor}}{{{summary['exact_matches']}}} \\end{{metricbox}} &",
+        f"\\begin{{metricbox}}[Accuracy] \\Huge\\textcolor{{{acc_color}}}{{{overall_acc:.1f}}}\\% \\end{{metricbox}} &",
+        f"\\begin{{metricbox}}[Avg Similarity] \\Huge\\textcolor{{{sim_color}}}{{{avg_sim:.1f}}}\\% \\end{{metricbox}}",
+        r"\end{tabular}\end{center}",
+        r"\textit{See \hyperref[sec:field-comparison]{Detailed Field Comparison} section for field-by-field analysis.}",
+        r"\end{summarybox}",
+        r"\vspace{0.8cm}",
+        r"\begin{center}\begin{tcolorbox}[colback=white, colframe=gray!50, width=0.95\textwidth, halign=center,valign=center]",
+        r"\sffamily\matchicon\ \textbf{Exact Match} \quad \mismatchicon\ \textbf{Mismatch} \quad \gtlabel\ Ground Truth \quad \ailabel\ AI Extraction",
+        r"\end{tcolorbox}\end{center}",
+        r"\newpage",
+    ]
+    
+    # Insert title page content at the beginning of document content
+    latex.extend(title_page_content)
     
     # Determine output directory and input images directory
     if filename:
@@ -360,7 +395,7 @@ def generate_latex_report_for_match(
             input_images_dir = abs_path
             break
     
-    logger.info("[Report] Generating executive summary...")
+    logger.info("[Report] Generating summary section...")
     summary_content = generate_executive_summary(
         metrics,
         extracted_entities=extracted_entities,
@@ -368,7 +403,7 @@ def generate_latex_report_for_match(
         input_images_dir=input_images_dir,
         output_dir=output_dir
     )
-    logger.info("[Report] Executive summary generated")
+    logger.info("[Report] Summary section generated")
 
     latex.extend(summary_content)
     logger.info("[Report] Generating cost breakdown section...")

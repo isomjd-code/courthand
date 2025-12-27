@@ -74,8 +74,8 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\setkeys{Gin}{width=0.75\textwidth,max height=4cm,keepaspectratio}",
         r"\usepackage{soul}",
         r"\usepackage{paracol}",
-        r"\usepackage{hyperref}",
-        r"\hypersetup{colorlinks=true, linkcolor=AccentBlue, urlcolor=AccentBlue, citecolor=AccentBlue, pdfstartview=FitH}",
+        r"\setcounter{secnumdepth}{0}",
+        r"\setcounter{tocdepth}{2}",
         r"\definecolor{MatchColor}{RGB}{34, 139, 34}",
         r"\definecolor{GTColor}{RGB}{178, 34, 34}",
         r"\definecolor{AIColor}{RGB}{0, 71, 171}",
@@ -89,6 +89,14 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\definecolor{DiffGreen}{RGB}{200, 255, 200}",
         r"\definecolor{LowConfYellow}{RGB}{255, 255, 200}",
         r"\definecolor{LowConfRed}{RGB}{255, 200, 200}",
+        r"\usepackage{titlesec}",
+        r"\titleformat{\section}{\Large\bfseries\sffamily\color{HeaderBg}}{}{0em}{}[\titlerule]",
+        r"\titleformat{\subsection}{\large\bfseries\sffamily\color{AccentBlue}}{}{0em}{}",
+        r"\titleformat{\subsubsection}{\normalsize\bfseries\sffamily}{}{0em}{}",
+        r"\makeatletter",
+        r"\renewcommand{\@dotsep}{4.5}",
+        r"\makeatother",
+        r"\renewcommand{\contentsname}{Contents}",
         r"\newtcolorbox{summarybox}[1][]{enhanced, breakable, colback=blue!5!white, colframe=AccentBlue, fonttitle=\bfseries\sffamily, title={#1}, boxrule=1pt, arc=3mm}",
         r"\newtcolorbox{metricbox}[1][]{enhanced, colback=gray!5!white, colframe=gray!50!black, fonttitle=\bfseries\sffamily\small, title={#1}, boxrule=0.5pt, arc=2mm, width=0.22\textwidth, halign=center}",
         r"\newtcolorbox{textbox}[1][]{enhanced, breakable, colback=gray!8!white, colframe=gray!60!black, fonttitle=\bfseries\sffamily\small, title={#1}, boxrule=0.5pt, arc=2mm, left=3mm, right=3mm, top=2mm, bottom=2mm}",
@@ -99,10 +107,6 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\fancyfoot[C]{\sffamily\small Page \thepage\ of \pageref{LastPage}}",
         r"\renewcommand{\headrulewidth}{0.4pt}",
         r"\renewcommand{\footrulewidth}{0.4pt}",
-        r"\usepackage{titlesec}",
-        r"\titleformat{\section}{\Large\bfseries\sffamily\color{HeaderBg}}{}{0em}{}[\titlerule]",
-        r"\titleformat{\subsection}{\large\bfseries\sffamily\color{AccentBlue}}{}{0em}{}",
-        r"\titleformat{\subsubsection}{\normalsize\bfseries\sffamily}{}{0em}{}",
         r"\newcommand{\fieldlabel}[1]{\textbf{\sffamily #1}}",
         r"\newcommand{\gtlabel}{\textcolor{GTColor}{\textbf{[GT]}}}",
         r"\newcommand{\ailabel}{\textcolor{AIColor}{\textbf{[AI]}}}",
@@ -112,7 +116,9 @@ def generate_latex_preamble(meta: Dict[str, Any]) -> List[str]:
         r"\newcommand{\progressbar}[2]{\begin{tikzpicture}[baseline=-0.5ex]\fill[gray!20] (0,0) rectangle (3cm,0.3cm);\fill[#1] (0,0) rectangle (#2*3cm,0.3cm);\end{tikzpicture}}",
         r"\newcommand{\diffgt}[1]{\textcolor{GTColor}{\sout{#1}}}",
         r"\newcommand{\diffai}[1]{\textcolor{MatchColor}{#1}}",
-        r"\title{\sffamily\bfseries\Huge AI Extraction Validation Report}",
+        r"\usepackage{hyperref}",
+        r"\hypersetup{colorlinks=true, linkcolor=AccentBlue, urlcolor=AccentBlue, citecolor=AccentBlue, pdfstartview=FitH, bookmarks=true, bookmarksopen=true}",
+        r"\title{\sffamily\bfseries\Large AI Extraction Validation Report}",
         f"\\author{{\\sffamily Case Reference: {case_id}}}",
         r"\date{\sffamily\today}",
     ]
@@ -541,6 +547,19 @@ def _extract_and_process_line_image(
     original_file_id: Optional[str] = None
 ) -> bool:
     """Extract and process a line image, saving as a high-compatibility JPEG."""
+    # Check if output image already exists (check both .jpg and .png variants)
+    jpg_path = output_path
+    if output_path.lower().endswith('.png'):
+        jpg_path = output_path[:-4] + ".jpg"
+    
+    if os.path.exists(jpg_path):
+        logger.debug(f"[Line Image] Line image already exists, skipping extraction: {jpg_path}")
+        return True
+    
+    if os.path.exists(output_path):
+        logger.debug(f"[Line Image] Line image already exists, skipping extraction: {output_path}")
+        return True
+    
     if not LINE_PREPROCESSING_AVAILABLE:
         logger.warning(f"[Line Image] Line preprocessing not available (opencv missing), skipping line image extraction for {line_id}")
         return False
@@ -642,16 +661,7 @@ def generate_executive_summary(
     sim_color = get_accuracy_color(avg_sim)
 
     latex = [
-        r"\section{Executive Summary}\label{sec:executive-summary}",
-        r"\begin{summarybox}[Validation Overview]",
-        r"\begin{center}\begin{tabular}{cccc}",
-        f"\\begin{{metricbox}}[Total Fields] \\Huge {summary['total_fields']} \\end{{metricbox}} &",
-        f"\\begin{{metricbox}}[Exact Matches] \\Huge\\textcolor{{MatchColor}}{{{summary['exact_matches']}}} \\end{{metricbox}} &",
-        f"\\begin{{metricbox}}[Accuracy] \\Huge\\textcolor{{{acc_color}}}{{{overall_acc:.1f}}}\\% \\end{{metricbox}} &",
-        f"\\begin{{metricbox}}[Avg Similarity] \\Huge\\textcolor{{{sim_color}}}{{{avg_sim:.1f}}}\\% \\end{{metricbox}}",
-        r"\end{tabular}\end{center}",
-        r"\textit{See \hyperref[sec:field-comparison]{Detailed Field Comparison} section for field-by-field analysis.}",
-        r"\end{summarybox}",
+        r"\section{Summary}\label{sec:summary}",
         r"\subsection{Accuracy by Category}",
         r"\begin{center}\begin{tabular}{lcccc}\toprule",
         r"\textbf{Category} & \textbf{Total} & \textbf{Matches} & \textbf{Accuracy} & \textbf{Visual} \\ \midrule",
@@ -2157,7 +2167,7 @@ def generate_case_comparison_section(
     case_id = clean_text_for_xelatex(gt_case.get("TblCase", {}).get("CaseRot", "Unknown Rotulus"))
     latex = [
         r"\section{Case Record Comparison}\label{sec:case-comparison}",
-        f"\\subsection*{{Court of Common Pleas, CP40-565 {case_id}}}",
+        f"\\subsection{{Court of Common Pleas, CP40-565 {case_id}}}",
         r"\begin{tcolorbox}[colback=white, colframe=gray!75, breakable, sharp corners]",
     ]
     
@@ -2333,7 +2343,7 @@ def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
     
     # Show texts in separate subsections to avoid alignment issues and empty pages
     # This is clearer and avoids the problem of mismatched paragraph counts
-    latex.append(r"\subsection*{Diplomatic Transcription}")
+    latex.append(r"\subsection{Diplomatic Transcription}")
     latex.append(r"\begin{textbox}[Consensus Diplomatic Transcription]")
     if consensus_diplomatic and consensus_diplomatic != "N/A":
         latex.append(clean_text_for_xelatex(consensus_diplomatic))
@@ -2342,7 +2352,7 @@ def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
     latex.append(r"\end{textbox}")
     latex.append(r"\vspace{0.5cm}")
     
-    latex.append(r"\subsection*{Expanded Latin}")
+    latex.append(r"\subsection{Expanded Latin}")
     latex.append(r"\begin{textbox}[Reconstructed Latin Text]")
     if latin_text and latin_text != "N/A":
         latex.append(clean_text_for_xelatex(latin_text))
@@ -2351,7 +2361,7 @@ def generate_full_text_section(master_data: Dict[str, Any]) -> List[str]:
     latex.append(r"\end{textbox}")
     latex.append(r"\vspace{0.5cm}")
     
-    latex.append(r"\subsection*{English Translation}")
+    latex.append(r"\subsection{English Translation}")
     latex.append(r"\begin{textbox}[English Translation]")
     if english_text and english_text != "N/A":
         latex.append(clean_text_for_xelatex(english_text))

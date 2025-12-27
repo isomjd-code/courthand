@@ -184,17 +184,46 @@ def compile_pdf(tex_path):
             return None
         
         # Run xelatex (may need to run multiple times for TOC and references)
-        # First pass: collect TOC entries
-        # Second pass: generate TOC with page numbers
-        # Third pass: resolve all cross-references
+        # First pass: collect TOC entries and write .toc file
+        # Second pass: read .toc file and generate TOC with page numbers
+        # Third pass: resolve all cross-references and finalize TOC
         for i in range(3):
+            print(f"Running xelatex pass {i+1}/3 (TOC generation requires multiple passes)...")
             try:
                 result = subprocess.run(
-                    ['xelatex', '-interaction=nonstopmode', tex_file],
+                    ['xelatex', '-interaction=nonstopmode', '-halt-on-error', tex_file],
                     capture_output=True,
                     text=True,
-                    timeout=120
+                    timeout=120,
+                    cwd=output_dir
                 )
+                # Small delay to ensure file system sync between passes
+                time.sleep(0.5)
+                
+                # Check if .toc file exists and has content after each pass
+                toc_file = os.path.splitext(tex_file)[0] + '.toc'
+                toc_path = os.path.join(output_dir, toc_file)
+                if os.path.exists(toc_path):
+                    toc_size = os.path.getsize(toc_path)
+                    if toc_size > 0:
+                        print(f"  Pass {i+1}: TOC file exists ({toc_size} bytes)")
+                        if i == 2:  # After final pass, show a preview
+                            try:
+                                with open(toc_path, 'r', encoding='utf-8') as f:
+                                    toc_content = f.read()
+                                    if 'contentsline' in toc_content.lower():
+                                        print(f"  TOC file contains entries (found 'contentsline')")
+                                    else:
+                                        print(f"  WARNING: TOC file exists but may be empty or malformed")
+                            except Exception as e:
+                                print(f"  Could not read TOC file: {e}")
+                    else:
+                        print(f"  Pass {i+1}: TOC file exists but is empty (0 bytes)")
+                else:
+                    if i == 0:
+                        print(f"  Pass {i+1}: TOC file not yet created (this is normal for pass 1)")
+                    else:
+                        print(f"  WARNING: Pass {i+1}: TOC file still not found")
                 if result.returncode != 0:
                     error_msg = f"ERROR: xelatex run {i+1} failed with return code {result.returncode}"
                     print(f"\n{'='*80}", file=sys.stderr)
