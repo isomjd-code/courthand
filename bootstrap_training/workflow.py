@@ -22,6 +22,7 @@ from google.genai.errors import ClientError
 
 from ground_truth.query import JSON_QUERY
 from line_preprocessor.parser import parse_kraken_json_for_processing
+from workflow_manager.kenlm_utils import ensure_kenlm_files
 from workflow_manager.settings import (
     API_MAX_RETRIES,
     API_RETRY_DELAY,
@@ -29,6 +30,9 @@ from workflow_manager.settings import (
     GEMINI_API_KEY,
     BASE_DIR,
     IMAGE_DIR,
+    KENLM_MODEL_PATH,
+    KENLM_MODEL_WEIGHT,
+    KENLM_USE_BINARY,
     KRAKEN_ENV,
     LOG_DIR,
     MODEL_TEXT,
@@ -1016,32 +1020,64 @@ if __name__ == '__main__':
                     # If it's a directory, set train_path to the directory and model_filename to just "model"
                     train_path = pylaia_arch
                     model_filename = "model"
-                    cmd_decode = (
-                        f"source {PYLAIA_ENV} && "
-                        f"pylaia-htr-decode-ctc "
-                        f"--trainer.accelerator gpu "
-                        f"--trainer.devices 1 "
-                        f"--common.checkpoint '{pylaia_model}' "
-                        f"--common.train_path '{train_path}' "
-                        f"--common.model_filename '{model_filename}' "
-                        f"--decode.include_img_ids true "
-                        f"--decode.print_word_confidence_score true "
-                        f"'{pylaia_syms}' '{list_txt}' > '{htr_res}'"
-                    )
+                    cmd_parts = [
+                        f"source {PYLAIA_ENV} &&",
+                        "pylaia-htr-decode-ctc",
+                        "--trainer.accelerator gpu",
+                        "--trainer.devices 1",
+                        f"--common.checkpoint '{pylaia_model}'",
+                        f"--common.train_path '{train_path}'",
+                        f"--common.model_filename '{model_filename}'",
+                        "--decode.include_img_ids true",
+                        "--decode.print_word_confidence_score true",
+                    ]
                 else:
                     # Use full paths for both checkpoint and model_filename (no train_path)
                     # This matches workflow_manager/workflow.py format exactly
-                    cmd_decode = (
-                        f"source {PYLAIA_ENV} && "
-                        f"pylaia-htr-decode-ctc "
-                        f"--trainer.accelerator gpu "
-                        f"--trainer.devices 1 "
-                        f"--common.checkpoint '{pylaia_model}' "
-                        f"--common.model_filename '{pylaia_arch}' "
-                        f"--decode.include_img_ids true "
-                        f"--decode.print_word_confidence_score true "
-                        f"'{pylaia_syms}' '{list_txt}' > '{htr_res}'"
-                    )
+                    cmd_parts = [
+                        f"source {PYLAIA_ENV} &&",
+                        "pylaia-htr-decode-ctc",
+                        "--trainer.accelerator gpu",
+                        "--trainer.devices 1",
+                        f"--common.checkpoint '{pylaia_model}'",
+                        f"--common.model_filename '{pylaia_arch}'",
+                        "--decode.include_img_ids true",
+                        "--decode.print_word_confidence_score true",
+                    ]
+                
+                # Add language model if available
+                if KENLM_MODEL_PATH and os.path.exists(KENLM_MODEL_PATH):
+                    # Determine which format to use
+                    if KENLM_USE_BINARY:
+                        # Try binary format first
+                        binary_path = KENLM_MODEL_PATH.replace('.arpa', '.klm')
+                        if os.path.exists(binary_path):
+                            lm_path = binary_path
+                        else:
+                            # Fall back to ARPA if binary doesn't exist
+                            lm_path = KENLM_MODEL_PATH
+                            logger.warning(f"Binary KenLM model not found at {binary_path}, using ARPA format")
+                    else:
+                        lm_path = KENLM_MODEL_PATH
+                    
+                    # Generate tokens and lexicon files from symbols file if needed
+                    # Always regenerate to ensure they include <ctc> and are up-to-date
+                    try:
+                        tokens_path, lexicon_path = ensure_kenlm_files(pylaia_syms, force_regenerate=True)
+                        cmd_parts.extend([
+                            f"--decode.use_language_model true",
+                            f"--decode.language_model_path '{lm_path}'",
+                            f"--decode.tokens_path '{tokens_path}'",
+                            f"--decode.lexicon_path '{lexicon_path}'",
+                            f"--decode.language_model_weight {KENLM_MODEL_WEIGHT}",
+                        ])
+                        logger.info(f"Using KenLM language model: {lm_path} (weight: {KENLM_MODEL_WEIGHT})")
+                    except Exception as e:
+                        logger.warning(f"Failed to generate KenLM support files: {e}. Language model disabled.")
+                
+                # Add syms and list files
+                cmd_parts.append(f"'{pylaia_syms}' '{list_txt}' > '{htr_res}'")
+                cmd_decode = " ".join(cmd_parts)
                 self._run_command(cmd_decode, "PyLaia Decode", raise_on_error=False)
             else:
                 with open(htr_res, 'w') as f:
@@ -3650,17 +3686,50 @@ crnn:
             return False
         
         # Run PyLaia decode
-        cmd_decode = (
-            f"source {PYLAIA_ENV} && "
-            f"pylaia-htr-decode-ctc "
-            f"--trainer.accelerator gpu "
-            f"--trainer.devices 1 "
-            f"--common.checkpoint '{checkpoint}' "
-            f"--common.model_filename '{model_file}' "
-            f"--decode.include_img_ids true "
-            f"--decode.print_word_confidence_score true "
-            f"'{syms_file}' '{list_txt}' > '{htr_res}'"
-        )
+        cmd_parts = [
+            f"source {PYLAIA_ENV} &&",
+            "pylaia-htr-decode-ctc",
+            "--trainer.accelerator gpu",
+            "--trainer.devices 1",
+            f"--common.checkpoint '{checkpoint}'",
+            f"--common.model_filename '{model_file}'",
+            "--decode.include_img_ids true",
+            "--decode.print_word_confidence_score true",
+        ]
+        
+        # Add language model if available
+        if KENLM_MODEL_PATH and os.path.exists(KENLM_MODEL_PATH):
+            # Determine which format to use
+            if KENLM_USE_BINARY:
+                # Try binary format first
+                binary_path = KENLM_MODEL_PATH.replace('.arpa', '.klm')
+                if os.path.exists(binary_path):
+                    lm_path = binary_path
+                else:
+                    # Fall back to ARPA if binary doesn't exist
+                    lm_path = KENLM_MODEL_PATH
+                    logger.warning(f"Binary KenLM model not found at {binary_path}, using ARPA format")
+            else:
+                lm_path = KENLM_MODEL_PATH
+            
+            # Generate tokens and lexicon files from symbols file if needed
+            # Always regenerate to ensure they include <ctc> and are up-to-date
+            try:
+                tokens_path, lexicon_path = ensure_kenlm_files(syms_file, force_regenerate=True)
+                cmd_parts.extend([
+                    f"--decode.use_language_model true",
+                    f"--decode.language_model_path '{lm_path}'",
+                    f"--decode.tokens_path '{tokens_path}'",
+                    f"--decode.lexicon_path '{lexicon_path}'",
+                    f"--decode.language_model_weight {KENLM_MODEL_WEIGHT}",
+                ])
+                logger.info(f"Using KenLM language model: {lm_path} (weight: {KENLM_MODEL_WEIGHT})")
+            except Exception as e:
+                logger.warning(f"Failed to generate KenLM support files: {e}. Language model disabled.")
+        
+        # Add syms and list files
+        cmd_parts.append(f"'{syms_file}' '{list_txt}' > '{htr_res}'")
+        cmd_decode = " ".join(cmd_parts)
         
         try:
             result = subprocess.run(

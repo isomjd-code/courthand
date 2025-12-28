@@ -42,6 +42,7 @@ from .schemas import (
     get_final_index_schema,
     get_merged_diplomatic_schema,
 )
+from .kenlm_utils import ensure_kenlm_files
 from .settings import (
     ACTIVE_MODEL_DIR,
     API_MAX_RETRIES,
@@ -52,6 +53,9 @@ from .settings import (
     COST_OUTPUT_TOKENS,
     GEMINI_API_KEY,
     IMAGE_DIR,
+    KENLM_MODEL_PATH,
+    KENLM_MODEL_WEIGHT,
+    KENLM_USE_BINARY,
     KRAKEN_ENV,
     LOG_DIR,
     MAX_WORKERS,
@@ -619,17 +623,74 @@ class WorkflowManager:
             if os.path.exists(list_txt) and os.path.getsize(list_txt) > 0:
                 # Get latest PyLaia model paths
                 pylaia_checkpoint, pylaia_arch, pylaia_syms = self._get_latest_pylaia_model_paths()
-                cmd_decode = (
-                    f"source {PYLAIA_ENV} && "
-                    f"pylaia-htr-decode-ctc "
-                    f"--trainer.accelerator gpu "
-                    f"--trainer.devices 1 "
-                    f"--common.checkpoint '{pylaia_checkpoint}' "
-                    f"--common.model_filename '{pylaia_arch}' "
-                    f"--decode.include_img_ids true "
-                    f"--decode.print_word_confidence_score true "
+                
+                # Build decode command
+                cmd_parts = [
+                    f"source {PYLAIA_ENV} &&",
+                    "pylaia-htr-decode-ctc",
+                    "--trainer.accelerator gpu",
+                    "--trainer.devices 1",
+                    f"--common.checkpoint '{pylaia_checkpoint}'",
+                    f"--common.model_filename '{pylaia_arch}'",
+                    "--decode.include_img_ids true",
+                    "--decode.print_word_confidence_score true",
+                ]
+                
+                # Add language model if available
+                if KENLM_MODEL_PATH and os.path.exists(KENLM_MODEL_PATH):
+                    # Determine which format to use
+                    if KENLM_USE_BINARY:
+                        # Try binary format first
+                        binary_path = KENLM_MODEL_PATH.replace('.arpa', '.klm')
+                        if os.path.exists(binary_path):
+                            lm_path = binary_path
+                        else:
+                            # Fall back to ARPA if binary doesn't exist
+                            lm_path = KENLM_MODEL_PATH
+                            logger.warning(f"Binary KenLM model not found at {binary_path}, using ARPA format")
+                    else:
+                        lm_path = KENLM_MODEL_PATH
+                    
+                    # Generate tokens and lexicon files from symbols file if needed
+                    # Always regenerate to ensure they include <ctc> and are up-to-date
+                    try:
+                        tokens_path, lexicon_path = ensure_kenlm_files(pylaia_syms, force_regenerate=True)
+                        
+                        # Verify files exist and contain <ctc>
+                        if not os.path.exists(tokens_path):
+                            raise FileNotFoundError(f"Tokens file not found: {tokens_path}")
+                        if not os.path.exists(lexicon_path):
+                            raise FileNotFoundError(f"Lexicon file not found: {lexicon_path}")
+                        
+                        # Verify <ctc> is in tokens file
+                        with open(tokens_path, 'r', encoding='utf-8') as f:
+                            tokens_content = f.read()
+                            if '<ctc>' not in tokens_content:
+                                raise ValueError(f"Tokens file {tokens_path} does not contain <ctc>")
+                        
+                        cmd_parts.extend([
+                            f"--decode.use_language_model true",
+                            f"--decode.language_model_path '{lm_path}'",
+                            f"--decode.tokens_path '{tokens_path}'",
+                            f"--decode.lexicon_path '{lexicon_path}'",
+                            f"--decode.language_model_weight {KENLM_MODEL_WEIGHT}",
+                        ])
+                        logger.info(f"Using KenLM language model: {lm_path} (weight: {KENLM_MODEL_WEIGHT})")
+                        logger.info(f"Tokens file: {tokens_path}, Lexicon file: {lexicon_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to generate KenLM support files: {e}. Language model disabled.")
+                        import traceback
+                        logger.debug(traceback.format_exc())
+                else:
+                    if KENLM_MODEL_PATH:
+                        logger.warning(f"KenLM model path configured but file not found: {KENLM_MODEL_PATH}")
+                
+                # Add syms and list files
+                cmd_parts.extend([
                     f"'{pylaia_syms}' '{list_txt}' > '{htr_res}'"
-                )
+                ])
+                
+                cmd_decode = " ".join(cmd_parts)
                 self._run_command(cmd_decode, "PyLaia Decode")
             else:
                 with open(htr_res, 'w') as f: f.write("")

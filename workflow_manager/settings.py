@@ -43,6 +43,12 @@ PYLAIA_MODEL = os.path.join(MODEL_DIR, "epoch=322-lowest_va_cer.ckpt") #CER of 2
 PYLAIA_SYMS = os.path.join(MODEL_DIR, "syms.txt")
 PYLAIA_ARCH = os.path.join(MODEL_DIR, "model")
 
+# LANGUAGE MODEL PATHS (KenLM)
+# Set to None to disable language model decoding
+KENLM_MODEL_PATH = os.path.join(BASE_DIR, "kenlm_model", "kenlm_model_3gram.arpa")
+KENLM_MODEL_WEIGHT = 1.5  # Language model weight (adjust based on performance)
+KENLM_USE_BINARY = False  # Set to True to use .klm binary format instead of .arpa
+
 # ACTIVE MODEL DIRECTORY - where the latest bootstrap model is copied for use
 ACTIVE_MODEL_DIR = os.path.join(BASE_DIR, "workflow_active_model")
 ACTIVE_MODEL_DIR = os.path.abspath(ACTIVE_MODEL_DIR)
