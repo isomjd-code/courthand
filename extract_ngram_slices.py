@@ -340,7 +340,7 @@ def process_ngrams(
     model,
     syms: SymbolsTable,
     output_dir: str,
-    max_examples_per_ngram: int = 1000,
+    max_examples_per_ngram: int = 10000,
     checkpoint_file: str = None
 ):
     """
@@ -462,6 +462,11 @@ def process_ngrams(
         # Normalize n-gram for searching (convert <space> to space character)
         normalized_ngram = normalize_ngram_for_search(ngram)
         
+        # Track statistics for debugging
+        found_in_decoded = 0
+        found_in_ground_truth = 0
+        extraction_failures = 0
+        
         # Process each example and save slices to disk immediately
         extract_start = time.time()
         for example_idx, example in enumerate(examples_found):
@@ -559,6 +564,7 @@ def process_ngrams(
                             torch.cuda.empty_cache()
                         continue
                     
+                    found_in_ground_truth += 1
                     # Use proportional mapping as fallback
                     # Map character position to approximate pixel position
                     char_ratio = ngram_pos / len(clean_text)
@@ -566,8 +572,10 @@ def process_ngrams(
                     start_x = int(char_ratio * new_width)
                     end_x = int(end_char_ratio * new_width)
                 else:
+                    found_in_decoded += 1
                     # Use decoded positions - more accurate
                     if decoded_ngram_pos + len(normalized_ngram) > len(decoded_times):
+                        extraction_failures += 1
                         # Clear memory before continuing
                         del img, img_resized, img_array, img_tensor, output, log_probs, probs
                         if device.type == 'cuda':
@@ -576,6 +584,7 @@ def process_ngrams(
                     
                     ngram_times = decoded_times[decoded_ngram_pos:decoded_ngram_pos + len(normalized_ngram)]
                     if not ngram_times:
+                        extraction_failures += 1
                         # Clear memory before continuing
                         del img, img_resized, img_array, img_tensor, output, log_probs, probs
                         if device.type == 'cuda':
@@ -588,12 +597,6 @@ def process_ngrams(
                     # Convert time steps to x-coordinates
                     start_x = int(start_time * compression_ratio)
                     end_x = int(end_time * compression_ratio)
-                
-                # Add padding to account for alignment uncertainty and compression artifacts
-                # Use larger padding (30% of compression ratio or at least 5 pixels)
-                padding = max(5, int(compression_ratio * 0.3))
-                start_x = max(0, start_x - padding)
-                end_x = min(new_width, end_x + padding)
                 
                 # Ensure end_x is at least start_x + 1
                 end_x = max(start_x + 1, end_x)
@@ -608,6 +611,7 @@ def process_ngrams(
                     
                     # Verify slice is valid
                     if slice_img.size[0] <= 0 or slice_img.size[1] <= 0:
+                        extraction_failures += 1
                         # Clear memory
                         del img, img_resized, img_array, img_tensor, output, log_probs, probs, slice_img
                         if device.type == 'cuda':
@@ -632,6 +636,7 @@ def process_ngrams(
                     if device.type == 'cuda':
                         torch.cuda.empty_cache()
                 except Exception as e:
+                    extraction_failures += 1
                     # Clear memory on error
                     if 'img' in locals():
                         del img
@@ -643,16 +648,21 @@ def process_ngrams(
                         torch.cuda.empty_cache()
                     continue
             except Exception as e:
+                extraction_failures += 1
                 print(f"  Error processing {example['id']} for n-gram '{ngram}': {e}")
                 # Clear any remaining memory
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
                 continue
         
+        # Print extraction statistics
+        not_found_count = len(examples_found) - found_in_decoded - found_in_ground_truth
+        print(f"    Extraction stats: {found_in_decoded} in decoded text, {found_in_ground_truth} in ground truth, "
+              f"{not_found_count} not found, {extraction_failures} extraction failures")
+        
         # Check if any slices were extracted
         if len(temp_slice_paths) == 0:
             print(f"    Warning: No slices extracted for '{ngram}' ({len(examples_found)} instances processed)")
-            print(f"      This usually means the n-gram wasn't found in the decoded/cleaned text for any instance")
             print(f"      Normalized n-gram: '{normalize_ngram_for_search(ngram)}'")
             # Clean up temp directory
             if os.path.exists(temp_dir):
@@ -664,131 +674,130 @@ def process_ngrams(
         
         print(f"    Successfully extracted {len(temp_slice_paths)} slices from {len(examples_found)} instances")
         
-        # After processing all instances for this n-gram, filter to keep only the 5% closest to centroid
+        # After processing all instances for this n-gram, filter by quality first, then PCA
         if len(temp_slice_paths) > 1:
-            print(f"    Applying PCA filtering for '{ngram}' ({len(temp_slice_paths)} instances)...")
+            print(f"    Applying quality filtering and PCA for '{ngram}' ({len(temp_slice_paths)} instances)...")
             pca_start = time.time()
             
-            # First pass: determine median width and height without loading all images
+            # First pass: determine median width without loading all images
+            # Height is always 128px, so no need to normalize height
             widths = []
-            height = None
             for temp_path, _, width in temp_slice_paths:
                 widths.append(width)
-                if height is None:
-                    # Load just one image to get height
-                    img = Image.open(temp_path).convert('L')
-                    height = img.size[1]
-                    del img
             
             median_width = int(np.median(widths))
             
             # Load and normalize images in batches to save memory
             # Process in chunks to avoid loading everything at once
             batch_size = min(100, len(temp_slice_paths))  # Process 100 at a time
-            normalized_data = []  # Store (final_path, normalized_array) but only temporarily
+            image_data = []  # Store (final_path, original_array, width_normalized_array)
             
             for batch_start in range(0, len(temp_slice_paths), batch_size):
                 batch_end = min(batch_start + batch_size, len(temp_slice_paths))
                 batch_paths = temp_slice_paths[batch_start:batch_end]
                 
                 # Load batch
-                batch_images = []
-                for temp_path, final_path, _ in batch_paths:
+                for temp_path, final_path, _ in batch_paths:  # Unpack: path, final_path, width
                     img = Image.open(temp_path).convert('L')
                     img_array = np.array(img, dtype=np.float32) / 255.0
                     h, w = img_array.shape
                     
-                    # Resample to median width using horizontal distance normalization
+                    # Store original (will be saved at original size)
+                    original_array = img_array.copy()
+                    
+                    # Normalize to median width (for vertical PCA)
                     y_coords, x_coords = np.mgrid[0:h, 0:median_width]
                     x_orig = (x_coords / median_width) * w
                     x_orig = np.clip(x_orig, 0, w - 1)
                     y_orig = np.clip(y_coords, 0, h - 1)
                     coords = np.array([y_orig, x_orig])
-                    resampled = map_coordinates(img_array, coords, order=1, mode='constant', cval=0.0)
-                    normalized_data.append((final_path, resampled.astype(np.float32)))
+                    width_normalized = map_coordinates(img_array, coords, order=1, mode='constant', cval=0.0)
+                    
+                    image_data.append((final_path, original_array, width_normalized.astype(np.float32)))
                     
                     # Clear immediately
-                    del img, img_array, resampled
+                    del img, img_array, width_normalized
                 
                 # Clear batch
-                del batch_images
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
             
-            # Apply PCA to find centroid (now we have normalized data)
-            if len(normalized_data) >= 2:
-                # Build flattened array in batches to save memory
-                # First, get the feature dimension
-                sample_img = normalized_data[0][1]
-                feature_dim = sample_img.size
+            # Apply PCA: vertical (width-normalized) and horizontal (width-normalized, height is always 128px)
+            if len(image_data) >= 2:
+                # Extract arrays
+                width_normalized_imgs = [img for _, _, img in image_data]
                 
-                # Build X array in chunks if needed
-                if len(normalized_data) * feature_dim > 100000000:  # ~100MB threshold
-                    # Use incremental approach - build X in smaller chunks
-                    X_parts = []
-                    chunk_size = max(1, 100000000 // feature_dim)
-                    for i in range(0, len(normalized_data), chunk_size):
-                        chunk = normalized_data[i:i+chunk_size]
-                        X_chunk = np.array([img.flatten() for _, img in chunk])
-                        X_parts.append(X_chunk)
-                        del chunk, X_chunk
-                    X = np.vstack(X_parts)
-                    del X_parts
-                else:
-                    # Small enough to build all at once
-                    X = np.array([img.flatten() for _, img in normalized_data])
+                # Vertical PCA (on width-normalized images)
+                # Each column is a vertical slice (128px tall)
+                X_vertical = np.array([img.flatten() for img in width_normalized_imgs])
+                # Use variance-based component selection: retain 95% of variance, but cap at reasonable limit
+                # This preserves detail while removing noise
+                max_components_vertical = min(len(image_data) - 1, X_vertical.shape[1])
                 
-                n_components = min(len(normalized_data) - 1, X.shape[1], 50)
-                if n_components > 0:
-                    pca = PCA(n_components=n_components)
-                    X_transformed = pca.fit_transform(X)
+                # Horizontal PCA (on width-normalized images - height is always 128px)
+                # Each row is a horizontal slice, transpose so each column is a horizontal slice
+                # All images have same width (median_width) after normalization, so rows have same length
+                X_horizontal = np.array([img.T.flatten() for img in width_normalized_imgs])
+                max_components_horizontal = min(len(image_data) - 1, X_horizontal.shape[1])
+                
+                if max_components_vertical > 0 and max_components_horizontal > 0:
+                    # Fit vertical PCA with variance-based component selection
+                    # Use 95% variance explained to preserve detail while removing noise
+                    pca_vertical = PCA(n_components=0.95)  # Retain 95% of variance
+                    X_vertical_transformed = pca_vertical.fit_transform(X_vertical)
+                    n_components_vertical = pca_vertical.n_components_
                     
-                    # Find centroid
-                    centroid = np.mean(X_transformed, axis=0)
+                    # Fit horizontal PCA with variance-based component selection
+                    pca_horizontal = PCA(n_components=0.95)  # Retain 95% of variance
+                    X_horizontal_transformed = pca_horizontal.fit_transform(X_horizontal)
+                    n_components_horizontal = pca_horizontal.n_components_
                     
-                    # Calculate distances to centroid
-                    distances = np.linalg.norm(X_transformed - centroid, axis=1)
+                    # Concatenate vertical and horizontal loadings
+                    X_combined = np.concatenate([X_vertical_transformed, X_horizontal_transformed], axis=1)
                     
-                    # Keep top 5% closest
-                    keep_count = max(1, int(len(normalized_data) * 0.05))
+                    # Find centroid in combined space
+                    centroid = np.mean(X_combined, axis=0)
+                    
+                    # Calculate distances to centroid using combined loadings
+                    distances = np.linalg.norm(X_combined - centroid, axis=1)
+                    
+                    # Keep top 1% closest to centroid
+                    keep_count = max(1, int(len(image_data) * 0.01))
                     closest_indices = np.argsort(distances)[:keep_count]
                     
-                    # Clear X and X_transformed to free memory
-                    del X, X_transformed, distances
-                    
-                    # Save only the closest instances (5%)
+                    # Save only the closest instances (1%) at original size
                     for idx in closest_indices:
-                        final_path, img_array = normalized_data[idx]
+                        final_path, original_array, _ = image_data[idx]
                         # Ensure directory exists before saving
                         os.makedirs(os.path.dirname(final_path), exist_ok=True)
-                        img_uint8 = (img_array * 255).astype(np.uint8)
+                        img_uint8 = (original_array * 255).astype(np.uint8)
                         Image.fromarray(img_uint8).save(final_path)
                         ngram_stats[length] += 1
                     
-                    # Clear normalized_data
-                    del normalized_data
+                    # Clear memory
+                    del X_vertical, X_horizontal, X_vertical_transformed, X_horizontal_transformed, X_combined, distances, image_data
                     
                     pca_time = time.time() - pca_start
-                    print(f"    PCA filtering complete: kept {len(closest_indices)}/{len(temp_slice_paths)} instances in {pca_time:.1f}s")
+                    print(f"    PCA filtering complete: kept {len(closest_indices)}/{len(temp_slice_paths)} instances (1%) in {pca_time:.1f}s")
                 else:
-                    # If PCA fails, save all
-                    for final_path, img_array in normalized_data:
+                    # If PCA fails, save all at original size
+                    for final_path, original_array, _ in image_data:
                         os.makedirs(os.path.dirname(final_path), exist_ok=True)
-                        img_uint8 = (img_array * 255).astype(np.uint8)
+                        img_uint8 = (original_array * 255).astype(np.uint8)
                         Image.fromarray(img_uint8).save(final_path)
                         ngram_stats[length] += 1
-                    del normalized_data
+                    del image_data
             else:
-                # If only one instance, save it
-                final_path, img_array = normalized_data[0]
+                # If only one instance, save it at original size
+                final_path, original_array, _ = image_data[0]
                 os.makedirs(os.path.dirname(final_path), exist_ok=True)
-                img_uint8 = (img_array * 255).astype(np.uint8)
+                img_uint8 = (original_array * 255).astype(np.uint8)
                 Image.fromarray(img_uint8).save(final_path)
                 ngram_stats[length] += 1
-                del normalized_data
+                del image_data
         elif len(temp_slice_paths) == 1:
-            # Only one instance, move from temp to final location
-            temp_path, final_path, _ = temp_slice_paths[0]
+            # Only one instance, move from temp to final location (at original size)
+            temp_path, final_path, _ = temp_slice_paths[0]  # Unpack: path, final_path, width
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
             shutil.move(temp_path, final_path)
             ngram_stats[length] += 1
@@ -860,8 +869,8 @@ def main():
     parser.add_argument(
         '--max-examples',
         type=int,
-        default=1000,
-        help='Maximum examples to extract per n-gram before filtering (default: 1000, will keep 5%% closest to centroid)'
+        default=10000,
+        help='Maximum examples to extract per n-gram before filtering (default: 10000, will keep 1%% closest to centroid)'
     )
     parser.add_argument(
         '--device',

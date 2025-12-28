@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate all n-grams of length 1-15 with at least 1000 occurrences from bootstrap training data.
+Generate all n-grams of length 1-15 with at least 1400 occurrences from bootstrap training data.
 """
 
 import os
@@ -129,7 +129,7 @@ def load_training_text(dataset_path: str, skip_augmented: bool = True) -> List[s
 def generate_important_ngrams(
     dataset_path: str,
     max_n: int = 15,
-    min_frequency: int = 1000,
+    min_frequency: int = 1400,
     skip_augmented: bool = True
 ) -> List[Tuple[str, int, int]]:
     """
@@ -138,7 +138,7 @@ def generate_important_ngrams(
     Args:
         dataset_path: Path to dataset directory
         max_n: Maximum n-gram length (default: 15)
-        min_frequency: Minimum frequency threshold (default: 1000)
+        min_frequency: Minimum frequency threshold (default: 1400)
         skip_augmented: If True, skip lines from augmented images (default: True)
         
     Returns:
@@ -204,8 +204,8 @@ def main():
     parser.add_argument(
         '--min-frequency',
         type=int,
-        default=1000,
-        help='Minimum frequency threshold (default: 1000)'
+        default=1400,
+        help='Minimum frequency threshold (default: 1400)'
     )
     parser.add_argument(
         '--format',
