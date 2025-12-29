@@ -41,7 +41,7 @@ def normalize_word(word: str) -> str:
 def weighted_choice_fast(items, weights, exclude=None):
     """
     Choose a random item based on weights, excluding a specific item if provided.
-    Optimized version that avoids creating new lists.
+    Optimized version using cumulative weights for better performance with large lists.
     
     Args:
         items: List of items
@@ -51,21 +51,27 @@ def weighted_choice_fast(items, weights, exclude=None):
     Returns:
         Randomly selected item based on weights
     """
+    if not items:
+        return None
+    
     if exclude:
-        # Filter in-place without creating intermediate list
-        filtered_items = []
-        filtered_weights = []
-        for item, weight in zip(items, weights):
-            if item != exclude:
-                filtered_items.append(item)
-                filtered_weights.append(weight)
-        if not filtered_items:
-            return None
-        items, weights = filtered_items, filtered_weights
+        # Find index of exclude item first (O(n) but only once)
+        try:
+            exclude_idx = items.index(exclude)
+            # Create new lists excluding the item
+            filtered_items = items[:exclude_idx] + items[exclude_idx+1:]
+            filtered_weights = weights[:exclude_idx] + weights[exclude_idx+1:]
+            if not filtered_items:
+                return None
+            items, weights = filtered_items, filtered_weights
+        except ValueError:
+            # Item not in list, no need to filter
+            pass
     
     if not items:
         return None
     
+    # Use random.choices which is optimized for weighted selection
     return random.choices(items, weights=weights, k=1)[0]
 
 
@@ -108,15 +114,19 @@ class DatabaseReplacer:
         self._place_abbreviated_set = None  # Set of abbreviated place forms for fast lookup
         self._place_latin_forms_map = None  # {latin_abbreviated: place_name}
         
-        # LRU caches for frequently accessed replacements (max 1000 entries each)
-        self._forename_cache = {}
-        self._max_cache_size = 1000
+        # Pre-loaded forename replacement mappings (word -> list of (replacement, weight) tuples)
+        # This eliminates database queries during replacement
+        self._forename_replacements = None  # {word: [(replacement, weight), ...]}
         
         # Pre-computed weighted lists (only loaded once, shared across queries)
         self._surname_items = None
         self._surname_weights = None
         self._place_items = None
         self._place_weights = None
+        
+        # Combined word type lookup for faster set checking
+        # Maps word -> set of types ('forename', 'surname', 'place', 'place_abbr')
+        self._word_type_map = None
         
     def _connect(self):
         """Lazy connection to database."""
@@ -133,8 +143,9 @@ class DatabaseReplacer:
         start_time = time.time()
         print(f"Loading lookup sets from database...")
         
-        # Load forename lookup set (only unique words, not full mappings)
+        # Load forename lookup set AND pre-load all replacement mappings
         try:
+            # First, get all forename words
             cursor = self.conn.execute("""
                 SELECT DISTINCT flf.latin_abbreviated
                 FROM forename_latin_forms flf
@@ -142,9 +153,57 @@ class DatabaseReplacer:
             """)
             self._forename_set = {row[0] for row in cursor.fetchall()}
             print(f"  Loaded {len(self._forename_set)} forename lookup entries")
+            
+            # Pre-load all forename replacement mappings to avoid database queries
+            print(f"  Pre-loading forename replacement mappings...")
+            forename_load_start = time.time()
+            self._forename_replacements = {}
+            
+            # Load all forename mappings grouped by case_name
+            cursor = self.conn.execute("""
+                SELECT flf.case_name, flf.latin_abbreviated, COALESCE(f.frequency, 0) as frequency
+                FROM forename_latin_forms flf
+                JOIN forenames f ON flf.forename_id = f.id
+                WHERE flf.latin_abbreviated IS NOT NULL AND flf.latin_abbreviated != ''
+                ORDER BY flf.case_name, flf.latin_abbreviated
+            """)
+            
+            # Group by case_name, then build mappings for each word
+            case_name_groups = {}
+            for row in cursor.fetchall():
+                case_name = row[0]
+                latin_abbr = row[1]
+                freq = row[2] or 0
+                
+                if case_name not in case_name_groups:
+                    case_name_groups[case_name] = []
+                case_name_groups[case_name].append((latin_abbr, freq))
+            
+            # For each word, build its replacement list from all case_names it appears in
+            for word in self._forename_set:
+                replacements = {}  # replacement -> max_frequency
+                
+                # Find all case_names containing this word
+                for case_name, items in case_name_groups.items():
+                    word_in_group = any(item[0] == word for item in items)
+                    if word_in_group:
+                        # Add all other words from this case_name as potential replacements
+                        for latin_abbr, freq in items:
+                            if latin_abbr != word:  # Exclude the word itself
+                                if latin_abbr not in replacements or freq > replacements[latin_abbr]:
+                                    replacements[latin_abbr] = freq
+                
+                if replacements:
+                    # Convert to list of (replacement, weight) tuples
+                    self._forename_replacements[word] = list(replacements.items())
+            
+            forename_load_time = time.time() - forename_load_start
+            print(f"  Pre-loaded {len(self._forename_replacements)} forename replacement mappings in {forename_load_time:.3f}s")
+            
         except sqlite3.OperationalError as e:
             print(f"  Warning: Could not load forename_latin_forms: {e}")
             self._forename_set = set()
+            self._forename_replacements = {}
         
         # Also check if we need to load place_latin_forms for abbreviated place names
         self._place_latin_forms_map = {}  # {latin_abbreviated: place_name}
@@ -246,65 +305,55 @@ class DatabaseReplacer:
             self._place_items = []
             self._place_weights = []
         
+        # Build combined word type map for faster lookups
+        print(f"  Building combined word type map...")
+        type_map_start = time.time()
+        self._word_type_map = {}
+        
+        # Add forenames
+        for word in self._forename_set:
+            if word not in self._word_type_map:
+                self._word_type_map[word] = set()
+            self._word_type_map[word].add('forename')
+        
+        # Add surnames
+        for word in self._surname_set:
+            if word not in self._word_type_map:
+                self._word_type_map[word] = set()
+            self._word_type_map[word].add('surname')
+        
+        # Add places
+        for word in self._place_set:
+            if word not in self._word_type_map:
+                self._word_type_map[word] = set()
+            self._word_type_map[word].add('place')
+        
+        # Add place abbreviations
+        for word in self._place_abbreviated_set:
+            if word not in self._word_type_map:
+                self._word_type_map[word] = set()
+            self._word_type_map[word].add('place_abbr')
+        
+        type_map_time = time.time() - type_map_start
+        print(f"  Built word type map with {len(self._word_type_map)} entries in {type_map_time:.3f}s")
+        
         load_time = time.time() - start_time
         print(f"Lookup sets loaded in {load_time:.3f}s\n")
     
     def _get_forename_replacement(self, word: str) -> str:
-        """Get a replacement forename for the given word, using cache."""
-        # Check cache first
-        if word in self._forename_cache:
-            return self._forename_cache[word]
-        
-        # Query database for case_names containing this word
-        cursor = self.conn.execute("""
-            SELECT DISTINCT flf.case_name
-            FROM forename_latin_forms flf
-            WHERE flf.latin_abbreviated = ?
-              AND flf.latin_abbreviated IS NOT NULL AND flf.latin_abbreviated != ''
-        """, (word,))
-        case_names = [row[0] for row in cursor.fetchall()]
-        
-        if not case_names:
+        """Get a replacement forename for the given word, using pre-loaded mappings."""
+        if not self._forename_replacements or word not in self._forename_replacements:
             return None
         
-        # Pick a random case_name
-        case_name = random.choice(case_names)
-        
-        # Get replacements for this case_name (excluding the word itself)
-        cursor = self.conn.execute("""
-            SELECT flf.latin_abbreviated, COALESCE(f.frequency, 0) as frequency
-            FROM forename_latin_forms flf
-            JOIN forenames f ON flf.forename_id = f.id
-            WHERE flf.case_name = ? 
-              AND flf.latin_abbreviated IS NOT NULL 
-              AND flf.latin_abbreviated != ''
-              AND flf.latin_abbreviated != ?
-        """, (case_name, word))
-        rows = cursor.fetchall()
-        
-        if not rows:
+        # Get pre-loaded replacements with weights
+        replacements = self._forename_replacements[word]
+        if not replacements:
             return None
         
-        # Deduplicate and get max frequency per word
-        word_freq = {}
-        for row in rows:
-            w, freq = row[0], row[1] or 0
-            if w not in word_freq or freq > word_freq[w]:
-                word_freq[w] = freq
-        
-        if not word_freq:
-            return None
-        
-        # Weighted selection
-        items = list(word_freq.keys())
-        weights = [word_freq[w] for w in items]
-        replacement = random.choices(items, weights=weights, k=1)[0]
-        
-        # Cache result (with size limit)
-        if len(self._forename_cache) < self._max_cache_size:
-            self._forename_cache[word] = replacement
-        
-        return replacement
+        # Weighted selection (already pre-computed)
+        items = [r[0] for r in replacements]
+        weights = [r[1] for r in replacements]
+        return random.choices(items, weights=weights, k=1)[0]
     
     def _get_surname_replacement(self, word: str) -> str:
         """Get a replacement surname for the given word, using pre-computed lists."""
@@ -330,17 +379,35 @@ class DatabaseReplacer:
         words = text.split()
         replacement_counts = {'forenames': 0, 'surnames': 0, 'places': 0}
         
+        # Timing breakdown
+        timing_breakdown = {
+            'set_lookups': 0.0,
+            'forename_replacement': 0.0,
+            'surname_replacement': 0.0,
+            'place_replacement': 0.0,
+            'other_processing': 0.0
+        }
+        
         # Process words efficiently, building result as we go
         result_parts = []
         for word in words:
             replaced = False
             normalized = normalize_word(word)
             
-            # Check if word (original or normalized) is in place set
-            is_place = (word in self._place_set or normalized in self._place_set or 
-                       (self._place_abbreviated_set and (word in self._place_abbreviated_set or normalized in self._place_abbreviated_set)))
-            is_forename = normalized in self._forename_set
-            is_surname = normalized in self._surname_set
+            # Use combined word type map for faster lookups
+            lookup_start = time.time()
+            word_types = set()
+            # Check normalized word first (most common case)
+            if normalized in self._word_type_map:
+                word_types.update(self._word_type_map[normalized])
+            # Also check original word if different
+            if word != normalized and word in self._word_type_map:
+                word_types.update(self._word_type_map[word])
+            
+            is_place = 'place' in word_types or 'place_abbr' in word_types
+            is_forename = 'forename' in word_types
+            is_surname = 'surname' in word_types
+            timing_breakdown['set_lookups'] += time.time() - lookup_start
             
             # If word is a place AND (forename or surname), prioritize place for common place names
             # Common place names that might also be names: London, York, Kent, etc.
@@ -350,18 +417,23 @@ class DatabaseReplacer:
             if is_place and (is_forename or is_surname) and normalized.lower() in common_place_names:
                 # Prioritize place for common place names
                 place_name = None
-                if word in self._place_set:
-                    place_name = word
-                elif normalized in self._place_set:
-                    place_name = normalized
-                elif self._place_abbreviated_set:
+                if 'place' in word_types:
+                    # Direct place name match
+                    if word in self._place_set:
+                        place_name = word
+                    elif normalized in self._place_set:
+                        place_name = normalized
+                elif 'place_abbr' in word_types:
+                    # Abbreviated form - get full place name
                     if word in self._place_abbreviated_set:
                         place_name = self._place_latin_forms_map.get(word)
                     elif normalized in self._place_abbreviated_set:
                         place_name = self._place_latin_forms_map.get(normalized)
                 
                 if place_name:
+                    place_start = time.time()
                     replacement = self._get_place_replacement(place_name)
+                    timing_breakdown['place_replacement'] += time.time() - place_start
                     if replacement:
                         result_parts.append(replacement)
                         replacement_counts['places'] += 1
@@ -369,7 +441,9 @@ class DatabaseReplacer:
             
             # Check forenames (if not already replaced as place)
             if not replaced and is_forename:
+                forename_start = time.time()
                 replacement = self._get_forename_replacement(normalized)
+                timing_breakdown['forename_replacement'] += time.time() - forename_start
                 if replacement:
                     result_parts.append(replacement)
                     replacement_counts['forenames'] += 1
@@ -377,7 +451,9 @@ class DatabaseReplacer:
             
             # Check surnames (if not already replaced)
             if not replaced and is_surname:
+                surname_start = time.time()
                 replacement = self._get_surname_replacement(normalized)
+                timing_breakdown['surname_replacement'] += time.time() - surname_start
                 if replacement:
                     result_parts.append(replacement)
                     replacement_counts['surnames'] += 1
@@ -386,20 +462,23 @@ class DatabaseReplacer:
             # Check places (both direct names and Latin abbreviated forms)
             if not replaced:
                 place_name_to_check = None
-                # Check original word first (might have apostrophe like "London'")
-                if word in self._place_set:
-                    place_name_to_check = word
-                elif normalized in self._place_set:
-                    place_name_to_check = normalized
-                # Check if word (original or normalized) is an abbreviated form in place_latin_forms
-                elif self._place_abbreviated_set:
+                if 'place' in word_types:
+                    # Direct place name match
+                    if word in self._place_set:
+                        place_name_to_check = word
+                    elif normalized in self._place_set:
+                        place_name_to_check = normalized
+                elif 'place_abbr' in word_types:
+                    # Abbreviated form - get full place name
                     if word in self._place_abbreviated_set:
                         place_name_to_check = self._place_latin_forms_map.get(word)
                     elif normalized in self._place_abbreviated_set:
                         place_name_to_check = self._place_latin_forms_map.get(normalized)
                 
                 if place_name_to_check:
+                    place_start = time.time()
                     replacement = self._get_place_replacement(place_name_to_check)
+                    timing_breakdown['place_replacement'] += time.time() - place_start
                     if replacement:
                         result_parts.append(replacement)
                         replacement_counts['places'] += 1
@@ -411,7 +490,24 @@ class DatabaseReplacer:
         
         result = ' '.join(result_parts)
         total_time = time.time() - start_time
-        print(f"Replacement time: {total_time:.3f}s\n")
+        
+        # Calculate other processing time
+        measured_time = (timing_breakdown['set_lookups'] + 
+                        timing_breakdown['forename_replacement'] +
+                        timing_breakdown['surname_replacement'] +
+                        timing_breakdown['place_replacement'])
+        timing_breakdown['other_processing'] = max(0, total_time - measured_time)
+        
+        # Print detailed timing breakdown
+        print(f"Replacement time: {total_time:.3f}s")
+        if total_time > 0:
+            print(f"  Breakdown:")
+            print(f"    Set lookups: {timing_breakdown['set_lookups']:.3f}s ({timing_breakdown['set_lookups']/total_time*100:.1f}%)")
+            print(f"    Forename replacement: {timing_breakdown['forename_replacement']:.3f}s ({timing_breakdown['forename_replacement']/total_time*100:.1f}%)")
+            print(f"    Surname replacement: {timing_breakdown['surname_replacement']:.3f}s ({timing_breakdown['surname_replacement']/total_time*100:.1f}%)")
+            print(f"    Place replacement: {timing_breakdown['place_replacement']:.3f}s ({timing_breakdown['place_replacement']/total_time*100:.1f}%)")
+            print(f"    Other processing: {timing_breakdown['other_processing']:.3f}s ({timing_breakdown['other_processing']/total_time*100:.1f}%)")
+        print()
         
         return result, replacement_counts
     
