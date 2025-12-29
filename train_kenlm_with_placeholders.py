@@ -94,6 +94,15 @@ class NameDatabase:
         for case in LATIN_CASES:
             print(f"    Forename {case}: {len(self.forename_case_frequencies[case])} forms")
     
+    def _is_valid_token(self, word: str) -> bool:
+        """Check if a word is valid for language model (no spaces, tabs, etc.)."""
+        if not word or not word.strip():
+            return False
+        # Words cannot contain whitespace
+        if any(c in word for c in ' \t\n\r'):
+            return False
+        return True
+    
     def _load_surnames(self):
         """Load surnames with frequencies."""
         try:
@@ -106,11 +115,17 @@ class NameDatabase:
                 GROUP BY s.id, s.surname
                 HAVING frequency > 0
             """)
+            skipped = 0
             for row in cursor.fetchall():
                 surname = row['surname']
                 freq = row['frequency']
+                if not self._is_valid_token(surname):
+                    skipped += 1
+                    continue
                 self._surname_set.add(surname)
                 self.surname_frequencies[surname] = freq
+            if skipped > 0:
+                print(f"    (skipped {skipped} surnames with spaces/invalid chars)")
         except sqlite3.OperationalError as e:
             print(f"  Warning: Could not load surnames: {e}")
     
@@ -124,12 +139,17 @@ class NameDatabase:
                 WHERE flf.latin_abbreviated IS NOT NULL AND flf.latin_abbreviated != ''
                   AND flf.case_name IS NOT NULL
             """)
+            skipped = 0
             for row in cursor.fetchall():
                 latin_abbr = row['latin_abbreviated']
                 case_name = row['case_name'].lower()
                 freq = max(1, row['frequency'])
                 
                 if case_name not in LATIN_CASES:
+                    continue
+                
+                if not self._is_valid_token(latin_abbr):
+                    skipped += 1
                     continue
                 
                 # Store the mapping from word to case
@@ -146,11 +166,15 @@ class NameDatabase:
                     self.forename_case_frequencies[case_name][latin_abbr] = max(
                         self.forename_case_frequencies[case_name][latin_abbr], freq
                     )
+            if skipped > 0:
+                print(f"    (skipped {skipped} forenames with spaces/invalid chars)")
         except sqlite3.OperationalError as e:
             print(f"  Warning: Could not load forename_latin_forms: {e}")
     
     def _load_placenames(self):
         """Load placenames with frequencies."""
+        skipped = 0
+        
         # Try loading from places table with frequency
         try:
             cursor = self.conn.execute("""
@@ -161,6 +185,9 @@ class NameDatabase:
             for row in cursor.fetchall():
                 name = row['name']
                 freq = max(1, row['frequency'])
+                if not self._is_valid_token(name):
+                    skipped += 1
+                    continue
                 self._placename_set.add(name)
                 self.placename_frequencies[name] = freq
         except sqlite3.OperationalError:
@@ -176,6 +203,9 @@ class NameDatabase:
                 for row in cursor.fetchall():
                     name = row['name']
                     freq = max(1, row['frequency'])
+                    if not self._is_valid_token(name):
+                        skipped += 1
+                        continue
                     self._placename_set.add(name)
                     self.placename_frequencies[name] = freq
             except sqlite3.OperationalError as e:
@@ -192,12 +222,18 @@ class NameDatabase:
             for row in cursor.fetchall():
                 abbr = row['latin_abbreviated']
                 freq = max(1, row['frequency'])
+                if not self._is_valid_token(abbr):
+                    skipped += 1
+                    continue
                 self._place_abbreviated_set.add(abbr)
                 # Use the abbreviated form as key
                 if abbr not in self.placename_frequencies:
                     self.placename_frequencies[abbr] = freq
         except sqlite3.OperationalError:
             pass
+        
+        if skipped > 0:
+            print(f"    (skipped {skipped} placenames with spaces/invalid chars)")
     
     def get_word_type(self, word: str) -> Optional[Tuple[str, Optional[str]]]:
         """
@@ -273,6 +309,9 @@ def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[Li
     """
     Replace names in texts with placeholder tokens.
     
+    Note: Trailing punctuation is kept SEPARATE from placeholders to avoid
+    creating variants like "PLACEHOLDER_SURNAME," which would break n-gram removal.
+    
     Returns:
         Tuple of (modified_texts, substitution_counts)
     """
@@ -291,7 +330,7 @@ def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[Li
         modified_words = []
         
         for word in words:
-            # Strip trailing punctuation for lookup, but preserve it
+            # Strip trailing punctuation for lookup
             stripped = word.rstrip(',.;:!?')
             trailing = word[len(stripped):]
             
@@ -300,15 +339,22 @@ def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[Li
             if word_type is None:
                 modified_words.append(word)
             elif word_type[0] == 'surname':
-                modified_words.append(PLACEHOLDER_SURNAME + trailing)
+                # Keep placeholder and punctuation as SEPARATE tokens
+                modified_words.append(PLACEHOLDER_SURNAME)
+                if trailing:
+                    modified_words.append(trailing)
                 counts['surname'] += 1
             elif word_type[0] == 'placename':
-                modified_words.append(PLACEHOLDER_PLACENAME + trailing)
+                modified_words.append(PLACEHOLDER_PLACENAME)
+                if trailing:
+                    modified_words.append(trailing)
                 counts['placename'] += 1
             elif word_type[0] == 'forename':
                 case_name = word_type[1]
                 placeholder = get_forename_placeholder(case_name)
-                modified_words.append(placeholder + trailing)
+                modified_words.append(placeholder)
+                if trailing:
+                    modified_words.append(trailing)
                 counts[f'forename_{case_name}'] += 1
             else:
                 modified_words.append(word)
@@ -513,14 +559,16 @@ class ArpaParser:
                 backoff = float(parts[2]) if len(parts) > 2 else 0.0
                 self.bigrams.append((log_prob, words[0], words[1], backoff))
                 
-                # Track placeholder contexts
+                # Track placeholder contexts (normalize key to strip punctuation)
                 w1, w2 = words[0], words[1]
                 if self._is_placeholder(w1):
                     # Placeholder is first word: "PLACEHOLDER w2"
-                    self.placeholder_bigrams[w1].append((log_prob, (w2,), 0, backoff))
+                    key = self._normalize_placeholder(w1)
+                    self.placeholder_bigrams[key].append((log_prob, (w2,), 0, backoff))
                 if self._is_placeholder(w2):
                     # Placeholder is second word: "w1 PLACEHOLDER"
-                    self.placeholder_bigrams[w2].append((log_prob, (w1,), 1, backoff))
+                    key = self._normalize_placeholder(w2)
+                    self.placeholder_bigrams[key].append((log_prob, (w1,), 1, backoff))
     
     def _parse_trigram(self, line: str):
         """Parse a trigram line: log_prob word1 word2 word3"""
@@ -531,39 +579,59 @@ class ArpaParser:
             if len(words) >= 3:
                 self.trigrams.append((log_prob, words[0], words[1], words[2]))
                 
-                # Track placeholder contexts
+                # Track placeholder contexts (normalize key to strip punctuation)
                 w1, w2, w3 = words[0], words[1], words[2]
                 if self._is_placeholder(w1):
                     # "PLACEHOLDER w2 w3"
-                    self.placeholder_trigrams[w1].append((log_prob, (w2, w3), 0))
+                    key = self._normalize_placeholder(w1)
+                    self.placeholder_trigrams[key].append((log_prob, (w2, w3), 0))
                 if self._is_placeholder(w2):
                     # "w1 PLACEHOLDER w3"
-                    self.placeholder_trigrams[w2].append((log_prob, (w1, w3), 1))
+                    key = self._normalize_placeholder(w2)
+                    self.placeholder_trigrams[key].append((log_prob, (w1, w3), 1))
                 if self._is_placeholder(w3):
                     # "w1 w2 PLACEHOLDER"
-                    self.placeholder_trigrams[w3].append((log_prob, (w1, w2), 2))
+                    key = self._normalize_placeholder(w3)
+                    self.placeholder_trigrams[key].append((log_prob, (w1, w2), 2))
     
     def _is_placeholder(self, word: str) -> bool:
-        """Check if a word is a placeholder token."""
+        """Check if a word is a placeholder token (possibly with trailing punctuation)."""
         return word.startswith('PLACEHOLDER_')
     
+    def _normalize_placeholder(self, word: str) -> str:
+        """Normalize a placeholder by stripping trailing punctuation."""
+        return word.rstrip(',.;:!?')
+    
     def get_placeholder_probabilities(self) -> Dict[str, float]:
-        """Extract log probabilities for all placeholder tokens."""
+        """Extract log probabilities for all placeholder tokens (including with punctuation)."""
         placeholders = {}
         
+        # Helper to find placeholder in unigrams (with or without punctuation)
+        def find_placeholder_prob(placeholder: str) -> Optional[float]:
+            if placeholder in self.unigrams:
+                return self.unigrams[placeholder][0]
+            # Check for variants with punctuation
+            for word, (log_prob, _) in self.unigrams.items():
+                if self._word_is_placeholder(word, placeholder):
+                    return log_prob
+            return None
+        
         # Surname placeholder
-        if PLACEHOLDER_SURNAME in self.unigrams:
-            placeholders[PLACEHOLDER_SURNAME] = self.unigrams[PLACEHOLDER_SURNAME][0]
+        prob = find_placeholder_prob(PLACEHOLDER_SURNAME)
+        if prob is not None:
+            placeholders[PLACEHOLDER_SURNAME] = prob
         
         # Placename placeholder
-        if PLACEHOLDER_PLACENAME in self.unigrams:
-            placeholders[PLACEHOLDER_PLACENAME] = self.unigrams[PLACEHOLDER_PLACENAME][0]
+        prob = find_placeholder_prob(PLACEHOLDER_PLACENAME)
+        if prob is not None:
+            placeholders[PLACEHOLDER_PLACENAME] = prob
         
         # Forename placeholders by case
         for case in LATIN_CASES:
             placeholder = get_forename_placeholder(case)
-            if placeholder in self.unigrams:
-                placeholders[placeholder] = self.unigrams[placeholder][0]
+            prob = find_placeholder_prob(placeholder)
+            if prob is not None:
+                placeholders[placeholder] = prob
         
         return placeholders
     
@@ -576,12 +644,17 @@ class ArpaParser:
         top_names: int = 1000
     ):
         """
-        Replace a placeholder with actual names, distributing probability mass.
+        Expand a placeholder with actual names while keeping placeholder for backoff.
         
-        This implements class-based LM expansion:
-        1. Unigrams: ALL names get P(name) = P(placeholder) × (freq_name / total_freq)
-        2. Bigrams/Trigrams: Only top-N most frequent names get n-gram expansion
-           for top-K contexts. Rare names fall back to unigrams.
+        This implements a hybrid class-based LM approach:
+        1. KEEP placeholder unigram with residual probability (for unknown names)
+        2. KEEP placeholder n-grams (for contextual backoff with rare names)
+        3. ADD unigrams for all database names (probability from placeholder × freq/total)
+        4. ADD expanded n-grams for top-N names only (they get direct context)
+        
+        For rare names not in top-N:
+        - They have unigrams with frequency-based probability
+        - For context, decoder backs off through placeholder n-grams
         
         Args:
             placeholder: The placeholder token to replace
@@ -614,14 +687,27 @@ class ArpaParser:
         # Get top-N most frequent names for n-gram expansion
         sorted_names = sorted(names_with_frequencies.items(), key=lambda x: x[1], reverse=True)
         top_names_for_ngrams = dict(sorted_names[:top_names])
+        top_names_total_freq = sum(top_names_for_ngrams.values())
+        
+        # Calculate residual probability for placeholder (probability mass for names NOT in top-N)
+        residual_freq_ratio = 1.0 - (top_names_total_freq / total_freq) if total_freq > 0 else 0.0
+        residual_prob = placeholder_prob * residual_freq_ratio
         
         print(f"  {placeholder}:")
-        print(f"    Unigram log prob: {placeholder_log_prob:.6f} (prob: {placeholder_prob:.6e})")
-        print(f"    Total names: {len(names_with_frequencies):,}")
+        print(f"    Original unigram log prob: {placeholder_log_prob:.6f} (prob: {placeholder_prob:.6e})")
+        print(f"    Total names in database: {len(names_with_frequencies):,}")
         print(f"    Names for n-gram expansion: {len(top_names_for_ngrams):,} (top by frequency)")
+        print(f"    Residual probability for placeholder: {residual_prob:.6e} ({residual_freq_ratio*100:.1f}% of original)")
         
-        # Remove the placeholder from unigrams
-        del self.unigrams[placeholder]
+        # Update placeholder unigram with residual probability (for unknown/rare names)
+        if residual_prob > 0:
+            residual_log_prob = math.log10(residual_prob)
+            self.unigrams[placeholder] = (residual_log_prob, placeholder_backoff)
+            print(f"    Keeping placeholder with residual log prob: {residual_log_prob:.6f}")
+        else:
+            # All probability assigned to known names, remove placeholder
+            del self.unigrams[placeholder]
+            print(f"    Removing placeholder (all probability assigned to known names)")
         
         # Add each actual name with its share of the probability (unigrams for ALL names)
         added_unigrams = 0
@@ -638,7 +724,7 @@ class ArpaParser:
             self.unigrams[name] = (name_log_prob, placeholder_backoff)
             added_unigrams += 1
         
-        print(f"    Added {added_unigrams:,} new unigrams (all names)")
+        print(f"    Added {added_unigrams:,} new unigrams (all database names)")
         
         # Expand top-K bigram contexts (only for top-N names)
         added_bigrams = self._expand_bigram_contexts(
@@ -653,8 +739,15 @@ class ArpaParser:
         print(f"    Added {added_bigrams:,} new bigrams (top {top_names} names × top {top_contexts} contexts)")
         print(f"    Added {added_trigrams:,} new trigrams (top {top_names} names × top {top_contexts} contexts)")
         
-        # Remove placeholder n-grams (they've been replaced by expanded versions)
-        self._remove_placeholder_from_ngrams(placeholder)
+        # NOTE: We intentionally DO NOT remove placeholder n-grams!
+        # They serve as backoff context for rare names not in top-N.
+        # When decoder sees "Joh'i RareSurname":
+        # 1. No direct bigram "Joh'i RareSurname" exists
+        # 2. Backs off: α(Joh'i) × P(RareSurname)
+        # 3. The backoff weight α(Joh'i) was computed with placeholder, encoding
+        #    "forenames are often followed by surnames"
+        
+        print(f"    Keeping placeholder n-grams for backoff (not removed)")
         
         # Update counts
         self.ngram_counts[1] = len(self.unigrams)
@@ -709,7 +802,10 @@ class ArpaParser:
         log_freq_ratios: Dict[str, float],
         top_k: int
     ) -> int:
-        """Expand top-K trigram contexts with all names."""
+        """Expand top-K trigram contexts with all names.
+        
+        Also ensures the required bigram context exists (KenLM requires this).
+        """
         contexts = self.placeholder_trigrams.get(placeholder, [])
         if not contexts:
             return 0
@@ -719,6 +815,10 @@ class ArpaParser:
         
         added = 0
         existing_trigrams = set((tg[1], tg[2], tg[3]) for tg in self.trigrams)
+        existing_bigrams = set((bg[1], bg[2]) for bg in self.bigrams)
+        
+        # Default backoff weight for synthesized bigrams
+        default_backoff = -0.5
         
         for log_prob, context_words, position in sorted_contexts:
             for name in names_with_frequencies:
@@ -729,16 +829,30 @@ class ArpaParser:
                 if position == 0:
                     # "PLACEHOLDER w2 w3" -> "name w2 w3"
                     w1, w2, w3 = name, context_words[0], context_words[1]
+                    # Context bigram is "name w2" - need to ensure it exists
+                    context_bigram = (name, context_words[0])
                 elif position == 1:
                     # "w1 PLACEHOLDER w3" -> "w1 name w3"
                     w1, w2, w3 = context_words[0], name, context_words[1]
+                    # Context bigram is "w1 name" - need to ensure it exists
+                    context_bigram = (context_words[0], name)
                 else:
                     # "w1 w2 PLACEHOLDER" -> "w1 w2 name"
                     w1, w2, w3 = context_words[0], context_words[1], name
+                    # Context bigram is "w1 w2" - should already exist from original model
+                    context_bigram = None  # No need to add
                 
                 # Skip if this trigram already exists
                 if (w1, w2, w3) in existing_trigrams:
                     continue
+                
+                # Ensure context bigram exists (KenLM requires context of every n-gram to exist)
+                if context_bigram and context_bigram not in existing_bigrams:
+                    # Create the bigram with a reasonable probability
+                    # Use the trigram probability as a base (bigram should be more likely)
+                    bigram_log_prob = new_log_prob + 0.5  # Bigrams typically more probable
+                    self.bigrams.append((bigram_log_prob, context_bigram[0], context_bigram[1], default_backoff))
+                    existing_bigrams.add(context_bigram)
                 
                 self.trigrams.append((new_log_prob, w1, w2, w3))
                 existing_trigrams.add((w1, w2, w3))
@@ -746,13 +860,25 @@ class ArpaParser:
         
         return added
     
+    def _word_is_placeholder(self, word: str, placeholder: str) -> bool:
+        """Check if a word is the placeholder (including with punctuation attached)."""
+        if word == placeholder:
+            return True
+        # Also check for placeholder with trailing punctuation
+        if word.startswith(placeholder) and len(word) > len(placeholder):
+            trailing = word[len(placeholder):]
+            # If what follows is only punctuation, it's still the placeholder
+            if all(c in ',.;:!?' for c in trailing):
+                return True
+        return False
+    
     def _remove_placeholder_from_ngrams(self, placeholder: str):
-        """Remove n-grams containing a placeholder token."""
+        """Remove n-grams containing a placeholder token (including with punctuation)."""
         # Filter bigrams
         original_bigram_count = len(self.bigrams)
         self.bigrams = [
             bg for bg in self.bigrams
-            if bg[1] != placeholder and bg[2] != placeholder
+            if not self._word_is_placeholder(bg[1], placeholder) and not self._word_is_placeholder(bg[2], placeholder)
         ]
         removed_bigrams = original_bigram_count - len(self.bigrams)
         
@@ -760,44 +886,127 @@ class ArpaParser:
         original_trigram_count = len(self.trigrams)
         self.trigrams = [
             tg for tg in self.trigrams
-            if tg[1] != placeholder and tg[2] != placeholder and tg[3] != placeholder
+            if not any(self._word_is_placeholder(tg[i], placeholder) for i in [1, 2, 3])
         ]
         removed_trigrams = original_trigram_count - len(self.trigrams)
         
-        if removed_bigrams > 0 or removed_trigrams > 0:
-            print(f"    Removed {removed_bigrams} bigrams, {removed_trigrams} trigrams")
+        # Also remove placeholder (with punctuation variants) from unigrams if any slipped through
+        placeholder_unigrams = [w for w in self.unigrams.keys() if self._word_is_placeholder(w, placeholder)]
+        for w in placeholder_unigrams:
+            del self.unigrams[w]
+        
+        if removed_bigrams > 0 or removed_trigrams > 0 or placeholder_unigrams:
+            print(f"    Removed {removed_bigrams} bigrams, {removed_trigrams} trigrams, {len(placeholder_unigrams)} unigram variants")
         
         # Update counts
+        self.ngram_counts[1] = len(self.unigrams)
         self.ngram_counts[2] = len(self.bigrams)
         self.ngram_counts[3] = len(self.trigrams)
+    
+    def _format_log_prob(self, log_prob: float) -> str:
+        """Format log probability for ARPA file (avoid scientific notation)."""
+        if log_prob <= -99:
+            return "-99"
+        return f"{log_prob:.7g}"
+    
+    def _format_backoff(self, backoff: float) -> str:
+        """Format backoff weight for ARPA file."""
+        if backoff == 0.0:
+            return "0"
+        return f"{backoff:.7g}"
+    
+    def _is_valid_arpa_word(self, word: str) -> bool:
+        """Check if a word is valid for ARPA format (no spaces, tabs, newlines, etc.)."""
+        if not word or not word.strip():
+            return False
+        # ARPA words cannot contain whitespace (space, tab, newline, etc.)
+        if any(c in word for c in ' \t\n\r'):
+            return False
+        return True
     
     def write(self, output_path: Path):
         """Write the modified ARPA file."""
         print(f"Writing modified ARPA to: {output_path}")
         
+        # First pass: filter valid entries and count them
+        special_tokens = ['<unk>', '<s>', '</s>']
+        
+        # Filter unigrams - keep placeholders (they serve as backoff for unknown names)
+        valid_unigrams = []
+        placeholder_unigrams_kept = 0
+        for token in special_tokens:
+            if token in self.unigrams:
+                valid_unigrams.append((token, self.unigrams[token]))
+        for word in sorted(self.unigrams.keys()):
+            if word in special_tokens:
+                continue
+            # Keep placeholders - they serve as backoff for rare/unknown names
+            if self._is_placeholder(word):
+                placeholder_unigrams_kept += 1
+            if self._is_valid_arpa_word(word):
+                valid_unigrams.append((word, self.unigrams[word]))
+        if placeholder_unigrams_kept > 0:
+            print(f"  Keeping {placeholder_unigrams_kept} placeholder unigrams for backoff")
+        
+        # Filter bigrams - KEEP placeholders for backoff
+        valid_bigrams = []
+        placeholder_bigrams_kept = 0
+        for log_prob, w1, w2, backoff in self.bigrams:
+            # Keep bigrams with placeholders - they provide backoff context
+            if self._is_placeholder(w1) or self._is_placeholder(w2):
+                placeholder_bigrams_kept += 1
+            if self._is_valid_arpa_word(w1) and self._is_valid_arpa_word(w2):
+                valid_bigrams.append((log_prob, w1, w2, backoff))
+        if placeholder_bigrams_kept > 0:
+            print(f"  Keeping {placeholder_bigrams_kept} placeholder bigrams for backoff")
+        
+        # Filter trigrams - KEEP placeholders for backoff
+        valid_trigrams = []
+        placeholder_trigrams_kept = 0
+        for log_prob, w1, w2, w3 in self.trigrams:
+            # Keep trigrams with placeholders - they provide backoff context
+            if any(self._is_placeholder(w) for w in [w1, w2, w3]):
+                placeholder_trigrams_kept += 1
+            if all(self._is_valid_arpa_word(w) for w in [w1, w2, w3]):
+                valid_trigrams.append((log_prob, w1, w2, w3))
+        if placeholder_trigrams_kept > 0:
+            print(f"  Keeping {placeholder_trigrams_kept} placeholder trigrams for backoff")
+        
+        skipped = (len(self.unigrams) - len(valid_unigrams) + 
+                   len(self.bigrams) - len(valid_bigrams) +
+                   len(self.trigrams) - len(valid_trigrams))
+        
+        if skipped > 0:
+            print(f"  Filtered out {skipped} n-grams with invalid words (spaces, etc.)")
+        
+        # Second pass: write the file with correct counts
         with open(output_path, 'w', encoding='utf-8') as f:
-            # Write header
+            # Write header with correct counts
             f.write('\\data\\\n')
-            for order in sorted(self.ngram_counts.keys()):
-                f.write(f'ngram {order}={self.ngram_counts[order]}\n')
+            f.write(f'ngram 1={len(valid_unigrams)}\n')
+            f.write(f'ngram 2={len(valid_bigrams)}\n')
+            f.write(f'ngram 3={len(valid_trigrams)}\n')
+            # Include any higher-order n-gram counts from original model
+            for order in sorted(self.higher_ngrams.keys()):
+                f.write(f'ngram {order}={len(self.higher_ngrams[order])}\n')
             f.write('\n')
             
             # Write unigrams
             f.write('\\1-grams:\n')
-            for word, (log_prob, backoff) in sorted(self.unigrams.items()):
-                f.write(f'{log_prob}\t{word}\t{backoff}\n')
+            for word, (log_prob, backoff) in valid_unigrams:
+                f.write(f'{self._format_log_prob(log_prob)}\t{word}\t{self._format_backoff(backoff)}\n')
             f.write('\n')
             
             # Write bigrams
             f.write('\\2-grams:\n')
-            for log_prob, w1, w2, backoff in self.bigrams:
-                f.write(f'{log_prob}\t{w1} {w2}\t{backoff}\n')
+            for log_prob, w1, w2, backoff in valid_bigrams:
+                f.write(f'{self._format_log_prob(log_prob)}\t{w1} {w2}\t{self._format_backoff(backoff)}\n')
             f.write('\n')
             
-            # Write trigrams
+            # Write trigrams (no backoff for highest order)
             f.write('\\3-grams:\n')
-            for log_prob, w1, w2, w3 in self.trigrams:
-                f.write(f'{log_prob}\t{w1} {w2} {w3}\n')
+            for log_prob, w1, w2, w3 in valid_trigrams:
+                f.write(f'{self._format_log_prob(log_prob)}\t{w1} {w2} {w3}\n')
             f.write('\n')
             
             # Write any higher-order n-grams
@@ -808,6 +1017,20 @@ class ArpaParser:
                 f.write('\n')
             
             f.write('\\end\\\n')
+        
+        print(f"  Written: {len(valid_unigrams):,} unigrams, {len(valid_bigrams):,} bigrams, {len(valid_trigrams):,} trigrams")
+        
+        # Count placeholders in output (they should exist for backoff)
+        print("  Verifying output file...")
+        with open(output_path, 'r', encoding='utf-8') as f:
+            placeholder_lines = 0
+            for line in f:
+                if 'PLACEHOLDER_' in line:
+                    placeholder_lines += 1
+            if placeholder_lines > 0:
+                print(f"  ✓ Verified: {placeholder_lines} placeholder n-grams kept for backoff")
+            else:
+                print(f"  Warning: No placeholders in output (backoff may not work for rare names)")
         
         print(f"✓ Modified ARPA written")
 
@@ -1071,19 +1294,23 @@ def main():
     print(f"  - Final bigrams: {arpa.ngram_counts.get(2, 0):,}")
     print(f"  - Final trigrams: {arpa.ngram_counts.get(3, 0):,}")
     
-    print("\nHow it works (class-based LM approach):")
-    print("  1. ALL names get unigram probabilities (for backoff)")
+    print("\nHow it works (hybrid class-based LM approach):")
+    print("  1. ALL database names get unigram probabilities")
+    print("     P(name) = P(PLACEHOLDER) × (freq_name / total_freq)")
     print("  ")
     print(f"  2. Top {args.top_names} most frequent names get n-gram expansion:")
-    print("     For common contexts like 'de PLACEHOLDER_SURNAME':")
-    print("       - Expanded to 'de Smith', 'de Jones', etc.")
-    print("       - Each with probability: P(de PLACEHOLDER) × (freq_name / total)")
+    print("     'de PLACEHOLDER_SURNAME' → 'de Smith', 'de Jones', etc.")
+    print("     Each with: P(de name) = P(de PLACEHOLDER) × (freq_name / total)")
     print("  ")
-    print(f"  3. Rare names (not in top {args.top_names}) and rare contexts:")
-    print("     - Fall back to unigram P(name)")
+    print("  3. Placeholder n-grams KEPT for backoff:")
+    print("     - Rare names use placeholder context via backoff weights")
+    print("     - When seeing 'Joh'i RareSurname' (no direct bigram):")
+    print("       P(RareSurname | Joh'i) = α(Joh'i) × P(RareSurname)")
+    print("       where α(Joh'i) encodes 'forenames often followed by surnames'")
     print("  ")
-    print("  This is mathematically equivalent to:")
-    print("    P(word|context) = P(class|context) × P(word|class)")
+    print("  4. Placeholder unigram kept with residual probability:")
+    print("     - Handles names not in database (truly unknown)")
+    print("     - Probability = remaining mass after top-N names")
     
     return 0
 
