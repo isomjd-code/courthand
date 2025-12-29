@@ -28,6 +28,16 @@ import shutil
 from pathlib import Path
 import argparse
 from typing import Optional, Tuple
+import random
+import sys
+
+# Import functions from generate_text_with_replacements
+try:
+    from generate_text_with_replacements import load_model, DatabaseReplacer
+    GENERATE_TEXT_AVAILABLE = True
+except ImportError:
+    GENERATE_TEXT_AVAILABLE = False
+    print("Warning: generate_text_with_replacements not available. Synthetic text generation disabled.")
 
 
 def find_all_step2a_files(base_dir: Path) -> list[Path]:
@@ -63,6 +73,98 @@ def extract_merged_texts(file_paths: list[Path], min_words: int = 2) -> list[str
     
     print(f"Extracted {len(texts)} merged texts ({skipped} files skipped, {filtered} filtered as too short)")
     return texts
+
+
+def generate_synthetic_texts(
+    num_texts: int,
+    model_path: Path,
+    db_path: Path,
+    min_words: int = 2,
+    tries: int = 50
+) -> list[str]:
+    """
+    Generate synthetic texts using Markov model and database replacements.
+    
+    Args:
+        num_texts: Number of synthetic texts to generate
+        model_path: Path to Markov model JSON file
+        db_path: Path to database file
+        min_words: Minimum words per text
+        tries: Maximum attempts per text generation
+    
+    Returns:
+        List of generated texts
+    """
+    if not GENERATE_TEXT_AVAILABLE:
+        print("Warning: Cannot generate synthetic texts - generate_text_with_replacements not available")
+        return []
+    
+    if not model_path.exists():
+        print(f"Warning: Markov model not found at {model_path}. Skipping synthetic text generation.")
+        return []
+    
+    if not db_path.exists():
+        print(f"Warning: Database not found at {db_path}. Skipping synthetic text generation.")
+        return []
+    
+    print(f"\nGenerating {num_texts:,} synthetic texts...")
+    
+    # Load model
+    try:
+        model = load_model(model_path)
+    except Exception as e:
+        print(f"Warning: Failed to load Markov model: {e}. Skipping synthetic text generation.")
+        return []
+    
+    # Initialize database replacer
+    try:
+        replacer = DatabaseReplacer(db_path)
+    except Exception as e:
+        print(f"Warning: Failed to initialize database replacer: {e}. Skipping synthetic text generation.")
+        return []
+    
+    synthetic_texts = []
+    failed = 0
+    
+    try:
+        for i in range(num_texts):
+            if (i + 1) % 1000 == 0:
+                print(f"  Generated {i + 1:,}/{num_texts:,} texts...")
+            
+            # Generate text
+            sentence = None
+            for attempt in range(tries):
+                try:
+                    sentence = model.make_sentence()
+                    if sentence:
+                        break
+                except Exception:
+                    continue
+            
+            if not sentence:
+                failed += 1
+                continue
+            
+            # Replace words with database entries
+            try:
+                replaced_text, _ = replacer.replace_words(sentence)
+                
+                # Filter by minimum words
+                word_count = len(replaced_text.split())
+                if word_count >= min_words:
+                    synthetic_texts.append(replaced_text)
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+                continue
+        
+        print(f"Generated {len(synthetic_texts):,} synthetic texts ({failed} failed)")
+        
+    finally:
+        replacer.close()
+    
+    return synthetic_texts
 
 
 def prepare_training_text(texts: list[str], output_file: Path) -> None:
@@ -293,9 +395,27 @@ def main():
         help='Minimum words per text to include (default: 2)'
     )
     parser.add_argument(
-        '--keep-training-text',
+        '--delete-training-text',
         action='store_true',
-        help='Keep the training text file after training (default: delete it)'
+        help='Delete the training text file after training (default: keep it)'
+    )
+    parser.add_argument(
+        '--synthetic-count',
+        type=int,
+        default=0,
+        help='Number of synthetic texts to generate using generate_text_with_replacements (default: 0)'
+    )
+    parser.add_argument(
+        '--markov-model',
+        type=str,
+        default='markov_model.json',
+        help='Path to Markov model JSON file for synthetic text generation (default: markov_model.json)'
+    )
+    parser.add_argument(
+        '--db',
+        type=str,
+        default='cp40_records.db',
+        help='Path to database file for synthetic text generation (default: cp40_records.db)'
     )
     
     args = parser.parse_args()
@@ -322,13 +442,36 @@ def main():
         print("No step2a_merged.json files found")
         return 1
     
-    # Extract merged_text from all files
+    # Extract merged_text from all files (real text)
     print("Extracting merged_text from files...")
-    texts = extract_merged_texts(file_paths, min_words=args.min_words)
+    real_texts = extract_merged_texts(file_paths, min_words=args.min_words)
     
-    if not texts:
+    if not real_texts:
         print("No merged_text found in any files")
         return 1
+    
+    print(f"Extracted {len(real_texts):,} real texts")
+    
+    # Generate synthetic texts if requested
+    synthetic_texts = []
+    if args.synthetic_count > 0:
+        model_path = Path(__file__).parent / args.markov_model
+        db_path = Path(__file__).parent / args.db
+        
+        synthetic_texts = generate_synthetic_texts(
+            num_texts=args.synthetic_count,
+            model_path=model_path,
+            db_path=db_path,
+            min_words=args.min_words,
+            tries=50
+        )
+    
+    # Combine real and synthetic texts
+    texts = real_texts + synthetic_texts
+    
+    print(f"\nTotal training texts: {len(texts):,}")
+    print(f"  - Real texts: {len(real_texts):,}")
+    print(f"  - Synthetic texts: {len(synthetic_texts):,}")
     
     # Check if KenLM is installed
     is_installed, lmplz_path, build_binary_path = check_kenlm_installed()
@@ -369,9 +512,13 @@ def main():
         return 1
     
     # Clean up training text file if requested
-    if not args.keep_training_text and training_text_file.exists():
-        print(f"\nRemoving temporary training text file: {training_text_file}")
+    if args.delete_training_text and training_text_file.exists():
+        print(f"\nRemoving training text file: {training_text_file}")
         training_text_file.unlink()
+    else:
+        if training_text_file.exists():
+            size_mb = training_text_file.stat().st_size / (1024 * 1024)
+            print(f"\nTraining text file kept: {training_text_file} ({size_mb:.2f} MB)")
     
     # Print summary
     print("\n" + "="*60)
@@ -388,6 +535,9 @@ def main():
     print(f"\nModel statistics:")
     print(f"  - N-gram order: {args.order}")
     print(f"  - Training sentences: {len(texts):,}")
+    print(f"    - Real texts: {len(real_texts):,}")
+    if synthetic_texts:
+        print(f"    - Synthetic texts: {len(synthetic_texts):,}")
     print(f"  - Total words: {sum(len(t.split()) for t in texts):,}")
     
     print(f"\nUsage with Pylaia:")
