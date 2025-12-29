@@ -27,9 +27,12 @@ import tempfile
 import shutil
 from pathlib import Path
 import argparse
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import random
 import sys
+import multiprocessing as mp
+from functools import partial
+import time
 
 try:
     from tqdm import tqdm
@@ -40,11 +43,18 @@ except ImportError:
 
 # Import functions from generate_text_with_replacements
 try:
-    from generate_text_with_replacements import load_model, DatabaseReplacer
+    from generate_text_with_replacements import load_model, DatabaseReplacer, generate_texts_batch
     GENERATE_TEXT_AVAILABLE = True
 except ImportError:
     GENERATE_TEXT_AVAILABLE = False
     print("Warning: generate_text_with_replacements not available. Synthetic text generation disabled.")
+
+# Try to import numpy for seeding
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
 
 
 def find_all_step2a_files(base_dir: Path) -> list[Path]:
@@ -82,13 +92,58 @@ def extract_merged_texts(file_paths: list[Path], min_words: int = 2) -> list[str
     return texts
 
 
+def _worker_init(model_path: Path, db_path: Path, seed_base: int):
+    """Initialize worker process with its own model and replacer."""
+    global _worker_model, _worker_replacer
+    
+    # Set unique seed per worker
+    worker_seed = seed_base + mp.current_process()._identity[0] if mp.current_process()._identity else seed_base
+    random.seed(worker_seed)
+    if HAS_NUMPY:
+        np.random.seed(worker_seed)
+    
+    _worker_model = load_model(model_path)
+    _worker_replacer = DatabaseReplacer(db_path)
+    _worker_replacer._ensure_initialized()
+
+
+def _worker_generate_batch(args: Tuple[int, int, int]) -> List[str]:
+    """Worker function to generate a batch of texts."""
+    batch_size, tries, min_words = args
+    global _worker_model, _worker_replacer
+    
+    results = []
+    for _ in range(batch_size):
+        sentence = None
+        for attempt in range(tries):
+            try:
+                sentence = _worker_model.make_sentence()
+                if sentence:
+                    break
+            except Exception:
+                continue
+        
+        if not sentence:
+            continue
+        
+        try:
+            replaced_text, _ = _worker_replacer.replace_words(sentence)
+            if len(replaced_text.split()) >= min_words:
+                results.append(replaced_text)
+        except Exception:
+            continue
+    
+    return results
+
+
 def generate_synthetic_texts(
     num_texts: int,
     model_path: Path,
     db_path: Path,
     min_words: int = 2,
-    tries: int = 50
-) -> list[str]:
+    tries: int = 50,
+    num_workers: int = 0
+) -> List[str]:
     """
     Generate synthetic texts using Markov model and database replacements.
     
@@ -98,6 +153,7 @@ def generate_synthetic_texts(
         db_path: Path to database file
         min_words: Minimum words per text
         tries: Maximum attempts per text generation
+        num_workers: Number of parallel workers (0 = auto, 1 = single-threaded)
     
     Returns:
         List of generated texts
@@ -115,7 +171,71 @@ def generate_synthetic_texts(
         return []
     
     print(f"\nGenerating {num_texts:,} synthetic texts...")
+    start_time = time.time()
     
+    # Determine number of workers
+    if num_workers == 0:
+        num_workers = max(1, mp.cpu_count() - 1)
+    
+    # For small counts or single worker, use optimized single-threaded version
+    if num_workers == 1 or num_texts < 100:
+        return _generate_synthetic_texts_single(num_texts, model_path, db_path, min_words, tries)
+    
+    # Multiprocessing for large batches
+    print(f"  Using {num_workers} parallel workers...")
+    
+    # Split work into batches
+    batch_size = max(10, num_texts // (num_workers * 4))  # 4 batches per worker for load balancing
+    num_batches = (num_texts + batch_size - 1) // batch_size
+    
+    # Create batch arguments
+    batches = []
+    remaining = num_texts
+    for _ in range(num_batches):
+        this_batch = min(batch_size, remaining)
+        batches.append((this_batch, tries, min_words))
+        remaining -= this_batch
+    
+    synthetic_texts = []
+    seed_base = random.randint(0, 2**31)
+    
+    try:
+        with mp.Pool(
+            num_workers,
+            initializer=_worker_init,
+            initargs=(model_path, db_path, seed_base)
+        ) as pool:
+            # Process batches with progress bar
+            results = list(tqdm(
+                pool.imap_unordered(_worker_generate_batch, batches),
+                total=len(batches),
+                desc="  Generating synthetic texts",
+                unit="batch"
+            ))
+            
+            for batch_result in results:
+                synthetic_texts.extend(batch_result)
+    
+    except Exception as e:
+        print(f"  Warning: Multiprocessing failed ({e}), falling back to single-threaded...")
+        return _generate_synthetic_texts_single(num_texts, model_path, db_path, min_words, tries)
+    
+    elapsed = time.time() - start_time
+    rate = len(synthetic_texts) / elapsed if elapsed > 0 else 0
+    failed = num_texts - len(synthetic_texts)
+    print(f"Generated {len(synthetic_texts):,} synthetic texts in {elapsed:.1f}s ({rate:.1f} texts/sec, {failed} failed)")
+    
+    return synthetic_texts
+
+
+def _generate_synthetic_texts_single(
+    num_texts: int,
+    model_path: Path,
+    db_path: Path,
+    min_words: int = 2,
+    tries: int = 50
+) -> List[str]:
+    """Single-threaded optimized text generation."""
     # Load model
     try:
         model = load_model(model_path)
@@ -130,44 +250,18 @@ def generate_synthetic_texts(
         print(f"Warning: Failed to initialize database replacer: {e}. Skipping synthetic text generation.")
         return []
     
-    synthetic_texts = []
-    failed = 0
+    start_time = time.time()
     
     try:
-        for i in tqdm(range(num_texts), desc="  Generating synthetic texts", unit="text"):
-            # Generate text
-            sentence = None
-            for attempt in range(tries):
-                try:
-                    sentence = model.make_sentence()
-                    if sentence:
-                        break
-                except Exception:
-                    continue
-            
-            if not sentence:
-                failed += 1
-            else:
-                # Replace words with database entries
-                try:
-                    replaced_text, _ = replacer.replace_words(sentence)
-                    
-                    # Filter by minimum words
-                    word_count = len(replaced_text.split())
-                    if word_count >= min_words:
-                        synthetic_texts.append(replaced_text)
-                    else:
-                        failed += 1
-                        if failed <= 5:  # Show first few failures for debugging
-                            tqdm.write(f"    Warning: Text too short ({word_count} < {min_words} words): {replaced_text[:50]}...")
-                except Exception as e:
-                    failed += 1
-                    if failed <= 5:  # Show first few exceptions for debugging
-                        tqdm.write(f"    Warning: Replacement failed: {e}")
-                        import traceback
-                        traceback.print_exc()
+        # Use the optimized batch generation function
+        synthetic_texts = generate_texts_batch(
+            model, replacer, num_texts, tries, min_words, show_progress=True
+        )
         
-        print(f"Generated {len(synthetic_texts):,} synthetic texts ({failed} failed)")
+        elapsed = time.time() - start_time
+        rate = len(synthetic_texts) / elapsed if elapsed > 0 else 0
+        failed = num_texts - len(synthetic_texts)
+        print(f"Generated {len(synthetic_texts):,} synthetic texts in {elapsed:.1f}s ({rate:.1f} texts/sec, {failed} failed)")
         
     finally:
         replacer.close()
@@ -284,6 +378,7 @@ def train_kenlm_model(
             lmplz_path,
             '-o', str(order),  # N-gram order
             '-S', memory,      # Memory limit
+            '--discount_fallback',  # Use fallback discounts for unusual data distributions
             '--text', str(training_text_file),
             '--arpa', str(output_arpa)
         ]
@@ -425,6 +520,12 @@ def main():
         default='cp40_records.db',
         help='Path to database file for synthetic text generation (default: cp40_records.db)'
     )
+    parser.add_argument(
+        '--workers',
+        type=int,
+        default=0,
+        help='Number of parallel workers for synthetic text generation (0=auto, 1=single-threaded)'
+    )
     
     args = parser.parse_args()
     
@@ -471,7 +572,8 @@ def main():
             model_path=model_path,
             db_path=db_path,
             min_words=args.min_words,
-            tries=50
+            tries=50,
+            num_workers=args.workers
         )
     
     # Combine real and synthetic texts
