@@ -31,6 +31,13 @@ from typing import Optional, Tuple
 import random
 import sys
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm not available
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
+
 # Import functions from generate_text_with_replacements
 try:
     from generate_text_with_replacements import load_model, DatabaseReplacer
@@ -127,10 +134,7 @@ def generate_synthetic_texts(
     failed = 0
     
     try:
-        for i in range(num_texts):
-            if (i + 1) % 1000 == 0:
-                print(f"  Generated {i + 1:,}/{num_texts:,} texts...")
-            
+        for i in tqdm(range(num_texts), desc="  Generating synthetic texts", unit="text"):
             # Generate text
             sentence = None
             for attempt in range(tries):
@@ -143,21 +147,25 @@ def generate_synthetic_texts(
             
             if not sentence:
                 failed += 1
-                continue
-            
-            # Replace words with database entries
-            try:
-                replaced_text, _ = replacer.replace_words(sentence)
-                
-                # Filter by minimum words
-                word_count = len(replaced_text.split())
-                if word_count >= min_words:
-                    synthetic_texts.append(replaced_text)
-                else:
+            else:
+                # Replace words with database entries
+                try:
+                    replaced_text, _ = replacer.replace_words(sentence)
+                    
+                    # Filter by minimum words
+                    word_count = len(replaced_text.split())
+                    if word_count >= min_words:
+                        synthetic_texts.append(replaced_text)
+                    else:
+                        failed += 1
+                        if failed <= 5:  # Show first few failures for debugging
+                            tqdm.write(f"    Warning: Text too short ({word_count} < {min_words} words): {replaced_text[:50]}...")
+                except Exception as e:
                     failed += 1
-            except Exception:
-                failed += 1
-                continue
+                    if failed <= 5:  # Show first few exceptions for debugging
+                        tqdm.write(f"    Warning: Replacement failed: {e}")
+                        import traceback
+                        traceback.print_exc()
         
         print(f"Generated {len(synthetic_texts):,} synthetic texts ({failed} failed)")
         
