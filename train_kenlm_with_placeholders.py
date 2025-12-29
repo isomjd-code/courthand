@@ -52,6 +52,75 @@ PLACEHOLDER_SURNAME = 'PLACEHOLDER_SURNAME'
 PLACEHOLDER_PLACENAME = 'PLACEHOLDER_PLACENAME'
 PLACEHOLDER_FORENAME_PREFIX = 'PLACEHOLDER_FORENAME_'
 
+# Words to NEVER treat as names (even if in database)
+# These are common Latin terms that may appear in name databases as bynames
+# but should not be substituted as they're functional words in legal texts
+# NOTE: All lookups are done case-insensitively (converted to lowercase)
+_EXCLUDED_WORDS_RAW = {
+    # Feast days / Calendar terms (often used as bynames but are functional in dates)
+    'pasche', 'pasch', 'pascha',  # Easter
+    'michaelis', "mich'is", 'michaelmas',  # Michaelmas
+    'martini', 'martinmas',  # St. Martin's Day
+    'hillarij', 'hillarii', 'hilarii',  # St. Hilary
+    'trinitatis', 'trinitate',  # Trinity
+    'purificac', 'purificacionis',  # Purification
+    'natalis', 'nativitatis',  # Christmas/Nativity
+    'annunciac', 'annunciacionis',  # Annunciation
+    'pentecost', 'pentecoste',
+    'epiphanie', 'epiphaniae',
+    
+    # Days of the week (Latin)
+    'lune', 'martis', 'mercurij', 'mercurii', 'jovis', 'iovis', 
+    'veneris', 'sabbati', 'dominica', 'dominice',
+    
+    # Common legal/functional terms that might be in database
+    'die', 'dies', 'diem',
+    'anno', 'annum', 'anni', 'annis',
+    'regni', 'regnum', 'regno',
+    'termino', 'termini', 'terminus',
+    
+    # Very short words/abbreviations that are likely errors or king name abbreviations
+    'de', 'in', 'ad', 'et', 'a', 'e', 'r', 'h', 'r\'', 'e\'', 'h\'',
+    
+    # Religious terms commonly in dates (Latin "saint")
+    'sancti', 'sancte', 'sancto', 'sanctum', 'sancta', 'sanctae',
+    "s'ci", "s'ce", "s'co", "s'c'i", "s'c'e",
+    'beati', 'beate', 'beato', 'beatum', 'beata', 'beatae',
+    "b'i", "b'e", "b'o",
+    
+    # Regnal/royal terms
+    'regis', 'regine', 'rex', 'regina',
+    
+    # Country/region names (often in regnal formulas)
+    'anglie', "angl'", 'anglia', 'angliae',
+    'francie', "franc'", 'francia', 'franciae',
+    'hibernie', "hibern'", 'hibernia', 'hiberniae',  # Ireland
+    'scocie', "scoc'", 'scocia', 'scociae',  # Scotland
+    'wallie', "wall'", 'wallia', 'walliae',  # Wales
+    'aquitanie', "aquitan'",  # Aquitaine
+    
+    # County abbreviations and names (Latin)
+    "com'", 'comitatu', 'comitatus', 'comitatui',
+    "ebor'", 'eboraci', 'eboracum',  # York
+    "cantuar'", "cant'", 'cantuaria',  # Canterbury
+    "lincoln'", 'lincolnia',  # Lincoln
+    "norff'", "suff'", "essex'", "kent'", "sussex'",
+    "lancastr'", "lancast'",  # Lancaster
+    
+    # Major city names that should stay as places, not forenames
+    'london', "london'", 'londonia', 'londonie', 'londoniarum',
+    'oxon', "oxon'", 'oxonia', 'oxonie',
+    'cantabrigia', 'cantabrigie',
+    
+    # Common feast qualifiers
+    'baptiste', 'baptistae', "bapt'e",  # Baptist (as in John the Baptist)
+    'evangeliste', 'evangelistae',
+    'virginis', 'marie', 'mariae',  # Virgin Mary
+}
+
+# Create lowercase set for case-insensitive lookup
+EXCLUDED_WORDS = {w.lower() for w in _EXCLUDED_WORDS_RAW}
+
 def get_forename_placeholder(case_name: str) -> str:
     """Get placeholder token for a specific forename case."""
     return f"{PLACEHOLDER_FORENAME_PREFIX}{case_name.upper()}"
@@ -249,6 +318,10 @@ class NameDatabase:
             - type is 'surname', 'forename', 'placename', or None
             - case is the Latin case for forenames, None otherwise
         """
+        # First check exclusion list - these are never treated as names (case-insensitive)
+        if word.lower() in EXCLUDED_WORDS:
+            return None
+        
         # Check forenames first (they have case information)
         if word in self._forename_case_map:
             case_name = self._forename_case_map[word]
@@ -305,6 +378,111 @@ def extract_merged_texts(file_paths: List[Path], min_words: int = 2) -> List[str
     return texts
 
 
+def is_in_regnal_formula(words: List[str], idx: int) -> bool:
+    """
+    Check if the word at position idx is part of a regnal dating formula.
+    
+    Common patterns (king's name should NOT be substituted):
+    - "regni d'ni [NAME] nup' Regis"
+    - "regni domini [NAME] Regis"
+    - "d'ni [NAME] nup' Regis"
+    - "d'ni Regis [NAME]"
+    - "[NAME] nup' Regis Angl'"
+    - "anno regni [NAME]"
+    
+    Returns True if the word appears to be a king's name in a regnal formula.
+    """
+    # Get context words (strip punctuation for comparison)
+    def get_word(i: int) -> str:
+        if 0 <= i < len(words):
+            return words[i].rstrip(',.;:!?').lower()
+        return ""
+    
+    # Look at surrounding context
+    prev1 = get_word(idx - 1)
+    prev2 = get_word(idx - 2)
+    prev3 = get_word(idx - 3)
+    next1 = get_word(idx + 1)
+    next2 = get_word(idx + 2)
+    next3 = get_word(idx + 3)
+    
+    # Pattern: "d'ni [NAME] nup'" or "domini [NAME] nup'"
+    if prev1 in ("d'ni", "domini", "d'no", "domino") and next1 in ("nup'", "nunc", "regis"):
+        return True
+    
+    # Pattern: "regni [NAME] nup'" or "regni d'ni [NAME]"
+    if prev1 == "regni" and next1 in ("nup'", "nunc", "regis"):
+        return True
+    if prev2 == "regni" and prev1 in ("d'ni", "domini"):
+        return True
+    
+    # Pattern: "[NAME] nup' Regis" or "[NAME] nunc Regis"
+    if next1 in ("nup'", "nunc") and next2 == "regis":
+        return True
+    
+    # Pattern: "Regis [NAME] nunc/nup'" (less common but exists)
+    if prev1 == "regis" and next1 in ("nunc", "nup'", "s'c'di", "secundi", "primi", "tercii"):
+        return True
+    
+    # Pattern: "d'ni Regis [NAME]"
+    if prev2 in ("d'ni", "domini") and prev1 == "regis":
+        return True
+    
+    # Pattern: "regni d'ni Regis [NAME]"
+    if prev3 == "regni" and prev2 in ("d'ni", "domini") and prev1 == "regis":
+        return True
+    
+    return False
+
+
+def is_in_saint_formula(words: List[str], idx: int) -> bool:
+    """
+    Check if the word at position idx is a saint's name in a feast date formula.
+    
+    Common patterns (saint's name should NOT be substituted):
+    - "s'ci [NAME]" (sancti)
+    - "s'ce [NAME]" (sancte)
+    - "sancti [NAME]"
+    - "beati [NAME]"
+    - "festum [NAME]"
+    - "die s'ci [NAME]"
+    
+    Returns True if the word appears to be a saint's name in a date formula.
+    """
+    def get_word(i: int) -> str:
+        if 0 <= i < len(words):
+            return words[i].rstrip(',.;:!?').lower()
+        return ""
+    
+    prev1 = get_word(idx - 1)
+    prev2 = get_word(idx - 2)
+    
+    # Pattern: "s'ci/sancti/beati [NAME]"
+    saint_indicators = ("s'ci", "s'ce", "s'co", "sancti", "sancte", "sancto", 
+                        "beati", "beate", "beato", "b'e", "b'i")
+    if prev1 in saint_indicators:
+        return True
+    
+    # Pattern: "festum/festo [NAME]" (feast of...)
+    if prev1 in ("festum", "festo", "festu'", "f'm", "f'"):
+        return True
+    
+    # Pattern: "die s'ci [NAME]"
+    if prev2 == "die" and prev1 in saint_indicators:
+        return True
+    
+    # Pattern: "in octab'/octabis [NAME]"
+    if prev1 in ("octab'", "octabis", "octavis"):
+        return True
+    
+    # Pattern: "purificac'ois/nativitatis [NAME]" (Purification of Mary, etc.)
+    if prev1 in ("purificac'ois", "purificacionis", "nativitatis", "assumpcionis", 
+                 "annunciac'ois", "annunciacionis", "concepc'ois", "concepcionis"):
+        return True
+    
+    return False
+
+
 def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[List[str], Dict[str, int]]:
     """
     Replace names in texts with placeholder tokens.
@@ -312,16 +490,28 @@ def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[Li
     Note: Trailing punctuation is kept SEPARATE from placeholders to avoid
     creating variants like "PLACEHOLDER_SURNAME," which would break n-gram removal.
     
+    Uses context-aware pattern matching to avoid substituting:
+    - King's names in regnal dating formulas
+    - Saint's names in feast date formulas
+    
     Returns:
         Tuple of (modified_texts, substitution_counts)
     """
     print("Substituting names with placeholders...")
+    print(f"  (Excluding {len(EXCLUDED_WORDS)} common Latin words from matching)")
+    print(f"  (Using pattern-based exclusion for regnal/saint formulas)")
     
     modified_texts = []
     counts = {
         'surname': 0,
         'placename': 0,
+        'excluded': 0,  # Words that matched exclusion list
+        'regnal_excluded': 0,  # King's names in regnal formulas
+        'saint_excluded': 0,  # Saint's names in feast formulas
     }
+    excluded_examples = set()  # Track which excluded words were encountered
+    regnal_examples = set()  # Track regnal formula exclusions
+    saint_examples = set()  # Track saint formula exclusions
     for case in LATIN_CASES:
         counts[f'forename_{case}'] = 0
     
@@ -329,35 +519,50 @@ def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[Li
         words = text.split()
         modified_words = []
         
-        for word in words:
+        for idx, word in enumerate(words):
             # Strip trailing punctuation for lookup
             stripped = word.rstrip(',.;:!?')
             trailing = word[len(stripped):]
+            
+            # Track excluded words (case-insensitive)
+            if stripped.lower() in EXCLUDED_WORDS:
+                counts['excluded'] += 1
+                excluded_examples.add(stripped)
             
             word_type = name_db.get_word_type(stripped)
             
             if word_type is None:
                 modified_words.append(word)
-            elif word_type[0] == 'surname':
-                # Keep placeholder and punctuation as SEPARATE tokens
-                modified_words.append(PLACEHOLDER_SURNAME)
-                if trailing:
-                    modified_words.append(trailing)
-                counts['surname'] += 1
-            elif word_type[0] == 'placename':
-                modified_words.append(PLACEHOLDER_PLACENAME)
-                if trailing:
-                    modified_words.append(trailing)
-                counts['placename'] += 1
-            elif word_type[0] == 'forename':
-                case_name = word_type[1]
-                placeholder = get_forename_placeholder(case_name)
-                modified_words.append(placeholder)
-                if trailing:
-                    modified_words.append(trailing)
-                counts[f'forename_{case_name}'] += 1
             else:
-                modified_words.append(word)
+                # Check for contextual exclusions (regnal/saint formulas)
+                if is_in_regnal_formula(words, idx):
+                    modified_words.append(word)
+                    counts['regnal_excluded'] += 1
+                    regnal_examples.add(stripped)
+                elif is_in_saint_formula(words, idx):
+                    modified_words.append(word)
+                    counts['saint_excluded'] += 1
+                    saint_examples.add(stripped)
+                elif word_type[0] == 'surname':
+                    # Keep placeholder and punctuation as SEPARATE tokens
+                    modified_words.append(PLACEHOLDER_SURNAME)
+                    if trailing:
+                        modified_words.append(trailing)
+                    counts['surname'] += 1
+                elif word_type[0] == 'placename':
+                    modified_words.append(PLACEHOLDER_PLACENAME)
+                    if trailing:
+                        modified_words.append(trailing)
+                    counts['placename'] += 1
+                elif word_type[0] == 'forename':
+                    case_name = word_type[1]
+                    placeholder = get_forename_placeholder(case_name)
+                    modified_words.append(placeholder)
+                    if trailing:
+                        modified_words.append(trailing)
+                    counts[f'forename_{case_name}'] += 1
+                else:
+                    modified_words.append(word)
         
         modified_texts.append(' '.join(modified_words))
     
@@ -366,6 +571,15 @@ def substitute_placeholders(texts: List[str], name_db: NameDatabase) -> Tuple[Li
     print(f"  Placenames: {counts['placename']:,}")
     for case in LATIN_CASES:
         print(f"  Forename {case}: {counts[f'forename_{case}']:,}")
+    if counts['excluded'] > 0:
+        print(f"  Excluded (common Latin words): {counts['excluded']:,}")
+        print(f"    Examples: {sorted(excluded_examples)[:15]}")
+    if counts['regnal_excluded'] > 0:
+        print(f"  Excluded (king's names in regnal formulas): {counts['regnal_excluded']:,}")
+        print(f"    Examples: {sorted(regnal_examples)[:10]}")
+    if counts['saint_excluded'] > 0:
+        print(f"  Excluded (saint's names in feast formulas): {counts['saint_excluded']:,}")
+        print(f"    Examples: {sorted(saint_examples)[:10]}")
     
     return modified_texts, counts
 
@@ -1168,6 +1382,15 @@ def main():
         print("No texts extracted")
         return 1
     
+    # Save original corpus permanently (before placeholder substitution)
+    original_corpus_file = output_dir / "original_corpus.txt"
+    print(f"Saving original corpus to: {original_corpus_file}")
+    with open(original_corpus_file, 'w', encoding='utf-8') as f:
+        for text in texts:
+            f.write(text + '\n')
+    word_count = sum(len(text.split()) for text in texts)
+    print(f"✓ Original corpus saved: {len(texts):,} lines, {word_count:,} words")
+    
     # Step 3: Substitute placeholders
     print("\n" + "="*60)
     print("Step 3: Substituting names with placeholders")
@@ -1263,10 +1486,9 @@ def main():
     compile_arpa_to_binary(final_arpa, final_binary)
     
     # Cleanup intermediate files if requested
+    # Note: original_corpus.txt and placeholder_corpus.txt are always kept
     if not args.keep_intermediate:
         print("\nCleaning up intermediate files...")
-        if placeholder_corpus_file.exists():
-            placeholder_corpus_file.unlink()
         if initial_arpa.exists():
             initial_arpa.unlink()
     

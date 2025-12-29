@@ -46,7 +46,7 @@ PYLAIA_ARCH = os.path.join(MODEL_DIR, "model")
 # LANGUAGE MODEL PATHS (KenLM)
 # Set to None to disable language model decoding
 KENLM_MODEL_PATH = os.path.join(BASE_DIR, "kenlm_model", "kenlm_model_3gram.arpa")
-KENLM_MODEL_WEIGHT = 1.5  # Language model weight (adjust based on performance)
+KENLM_MODEL_WEIGHT = 1.0  # Language model weight (adjust based on performance)
 KENLM_USE_BINARY = False  # Set to True to use .klm binary format instead of .arpa
 
 # ACTIVE MODEL DIRECTORY - where the latest bootstrap model is copied for use
