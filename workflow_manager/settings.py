@@ -72,7 +72,7 @@ API_RETRY_DELAY = 15  # Initial delay in seconds between retries (will use expon
 # PARALLEL PROCESSING CONFIGURATION
 # Maximum number of parallel workers for processing groups
 # Can be overridden via WORKFLOW_MAX_WORKERS environment variable
-MAX_WORKERS = int(os.environ.get('WORKFLOW_MAX_WORKERS', '6'))  # Default: 6 parallel workers
+MAX_WORKERS = int(os.environ.get('WORKFLOW_MAX_WORKERS', '12'))  # Default: 6 parallel workers
 
 # Primary Google API key for Gemini (paid key required)
 GOOGLE_API_KEY = GEMINI_API_KEY

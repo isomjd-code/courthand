@@ -588,91 +588,84 @@ Your final answer must be exactly one of these numbers: 0, 90, 180, or 270. Noth
     
     def cleanup_cloud_files(self) -> None:
         """
-        Clean up all uploaded files from Google Gemini cloud storage.
+        Clean up uploaded files from Google Gemini cloud storage.
         
-        Removes all files that were uploaded for vision model processing.
+        Only deletes files that were uploaded by this worker instance (tracked in
+        uploaded_files_cache) to avoid interfering with other concurrent workers.
+        This prevents race conditions where one worker deletes files being used by another.
+        
+        Removes files that were uploaded for vision model processing.
         Useful for managing cloud storage quotas and costs.
         Called occasionally to prevent accumulation of uploaded files.
         """
-        logger.info("--- STARTING CLOUD STORAGE CLEANUP ---")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        logger.info("--- STARTING CLOUD STORAGE CLEANUP (worker-specific) ---")
         deleted_count = 0
         error_count = 0
         
+        # Only delete files from this worker's cache to avoid interfering with other workers
+        if not self.uploaded_files_cache:
+            logger.info("No files in cache to delete")
+            return
+        
         # Helper function to delete a single file
         def delete_file(client, file_name: str, client_name: str = "main") -> bool:
-            """Delete a single file. Returns True if successful, False otherwise."""
+            """Delete a single file. Returns True if successful, False otherwise.
+            
+            Treats PERMISSION_DENIED errors (file already deleted) as success
+            to handle race conditions when multiple workers delete files.
+            """
             try:
                 client.files.delete(name=file_name)
                 return True
             except Exception as e:
+                # Check if this is a PERMISSION_DENIED error indicating file doesn't exist
+                # This can happen when multiple workers try to delete the same file
+                error_str = str(e)
+                if "PERMISSION_DENIED" in error_str or "403" in error_str:
+                    if "may not exist" in error_str.lower() or "does not exist" in error_str.lower():
+                        # File was already deleted by another worker - treat as success
+                        logger.debug(f"File {file_name} already deleted from {client_name} client (race condition handled)")
+                        return True
                 logger.debug(f"Error deleting file {file_name} from {client_name} client: {e}")
                 return False
         
-        # Cleanup files from main client
-        try:
-            logger.info("Listing files from main client...")
-            file_iterator = self.client.files.list()
-            files_list = list(file_iterator)  # Convert to list to get count
-            total_files = len(files_list)
-            logger.info(f"Found {total_files} files to delete from main client")
-            
-            if total_files > 0:
-                # Delete files in parallel
-                max_workers = min(20, total_files)  # Limit to 20 concurrent deletions
-                logger.info(f"Deleting {total_files} files in parallel (max {max_workers} workers)...")
-                
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all deletion tasks
-                    future_to_file = {
-                        executor.submit(delete_file, self.client, f.name, "main"): f.name
-                        for f in files_list
-                    }
-                    
-                    # Track progress as deletions complete
-                    completed = 0
-                    for future in as_completed(future_to_file):
-                        if future.result():
-                            deleted_count += 1
-                        else:
-                            error_count += 1
-                        completed += 1
-                        if completed % 10 == 0 or completed == total_files:
-                            logger.info(f"Deleted {completed}/{total_files} files from main client...")
-        except Exception as e:
-            logger.error(f"Error listing files from main client: {e}")
+        # Extract file names from cache (both clients use the same client object)
+        files_to_delete = []
+        for cache_key, file_ref in self.uploaded_files_cache.items():
+            if file_ref and hasattr(file_ref, 'name'):
+                files_to_delete.append((file_ref.name, cache_key))
         
-        # Cleanup files from free client (used for rotation detection)
+        total_files = len(files_to_delete)
+        logger.info(f"Found {total_files} files in worker cache to delete")
+        
+        if total_files == 0:
+            logger.info("No files to delete")
+            return
+        
         try:
-            logger.info("Listing files from free client...")
-            file_iterator = self.free_client.files.list()
-            files_list = list(file_iterator)  # Convert to list to get count
-            total_files = len(files_list)
-            logger.info(f"Found {total_files} files to delete from free client")
+            # Delete files in parallel (using main client since free_client = self.client)
+            max_workers = min(20, total_files)
+            logger.info(f"Deleting {total_files} files in parallel (max {max_workers} workers)...")
             
-            if total_files > 0:
-                # Delete files in parallel
-                max_workers = min(20, total_files)  # Limit to 20 concurrent deletions
-                logger.info(f"Deleting {total_files} files in parallel (max {max_workers} workers)...")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_file = {
+                    executor.submit(delete_file, self.client, file_name, "main"): (file_name, path)
+                    for file_name, path in files_to_delete
+                }
                 
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all deletion tasks
-                    future_to_file = {
-                        executor.submit(delete_file, self.free_client, f.name, "free"): f.name
-                        for f in files_list
-                    }
-                    
-                    # Track progress as deletions complete
-                    completed = 0
-                    for future in as_completed(future_to_file):
-                        if future.result():
-                            deleted_count += 1
-                        else:
-                            error_count += 1
-                        completed += 1
-                        if completed % 10 == 0 or completed == total_files:
-                            logger.info(f"Deleted {completed}/{total_files} files from free client...")
+                completed = 0
+                for future in as_completed(future_to_file):
+                    if future.result():
+                        deleted_count += 1
+                    else:
+                        error_count += 1
+                    completed += 1
+                    if completed % 10 == 0 or completed == total_files:
+                        logger.info(f"Deleted {completed}/{total_files} files...")
         except Exception as e:
-            logger.error(f"Error listing files from free client: {e}")
+            logger.error(f"Error during cloud storage cleanup: {e}")
         
         # Clear the cache after cleanup
         self.uploaded_files_cache = {}
