@@ -1193,6 +1193,21 @@ class ArpaParser:
         if skipped > 0:
             print(f"  Filtered out {skipped} n-grams with invalid words (spaces, etc.)")
         
+        # Sort all n-grams by descending probability (highest probability first)
+        print("  Sorting n-grams by descending probability...")
+        
+        # Sort unigrams: special tokens first, then by probability (descending)
+        special_unigrams = [(w, p) for w, p in valid_unigrams if w in special_tokens]
+        regular_unigrams = [(w, p) for w, p in valid_unigrams if w not in special_tokens]
+        regular_unigrams.sort(key=lambda x: x[1][0], reverse=True)  # Sort by log_prob descending
+        valid_unigrams = special_unigrams + regular_unigrams
+        
+        # Sort bigrams by probability (descending)
+        valid_bigrams.sort(key=lambda x: x[0], reverse=True)  # x[0] is log_prob
+        
+        # Sort trigrams by probability (descending)
+        valid_trigrams.sort(key=lambda x: x[0], reverse=True)  # x[0] is log_prob
+        
         # Second pass: write the file with correct counts
         with open(output_path, 'w', encoding='utf-8') as f:
             # Write header with correct counts
@@ -1205,19 +1220,19 @@ class ArpaParser:
                 f.write(f'ngram {order}={len(self.higher_ngrams[order])}\n')
             f.write('\n')
             
-            # Write unigrams
+            # Write unigrams (sorted by descending probability)
             f.write('\\1-grams:\n')
             for word, (log_prob, backoff) in valid_unigrams:
                 f.write(f'{self._format_log_prob(log_prob)}\t{word}\t{self._format_backoff(backoff)}\n')
             f.write('\n')
             
-            # Write bigrams
+            # Write bigrams (sorted by descending probability)
             f.write('\\2-grams:\n')
             for log_prob, w1, w2, backoff in valid_bigrams:
                 f.write(f'{self._format_log_prob(log_prob)}\t{w1} {w2}\t{self._format_backoff(backoff)}\n')
             f.write('\n')
             
-            # Write trigrams (no backoff for highest order)
+            # Write trigrams (sorted by descending probability, no backoff for highest order)
             f.write('\\3-grams:\n')
             for log_prob, w1, w2, w3 in valid_trigrams:
                 f.write(f'{self._format_log_prob(log_prob)}\t{w1} {w2} {w3}\n')
